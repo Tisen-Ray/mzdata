@@ -602,6 +602,13 @@ mod tests {
         description
     }
 
+    fn make_timed_description(id: &str, start_time: f64, ms_level: u8) -> SpectrumDescription {
+        let mut description = make_description(id);
+        description.ms_level = ms_level;
+        description.acquisition.first_scan_mut().unwrap().start_time = start_time;
+        description
+    }
+
     fn make_array_spectrum(
         id: &str,
         mzs: &[f64],
@@ -637,6 +644,18 @@ mod tests {
         MultiLayerSpectrum::new(make_description(id), Some(arrays), None, None)
     }
 
+    fn make_timed_array_spectrum(
+        id: &str,
+        start_time: f64,
+        ms_level: u8,
+        mzs: &[f64],
+        intensities: &[f32],
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        let mut spectrum = make_array_spectrum(id, mzs, intensities);
+        spectrum.description = make_timed_description(id, start_time, ms_level);
+        spectrum
+    }
+
     fn make_peak_spectrum(
         id: &str,
         peaks: Vec<CentroidPeak>,
@@ -647,6 +666,17 @@ mod tests {
             Some(PeakSetVec::new(peaks)),
             None,
         )
+    }
+
+    fn make_timed_peak_spectrum(
+        id: &str,
+        start_time: f64,
+        ms_level: u8,
+        peaks: Vec<CentroidPeak>,
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        let mut spectrum = make_peak_spectrum(id, peaks);
+        spectrum.description = make_timed_description(id, start_time, ms_level);
+        spectrum
     }
 
     #[test]
@@ -714,5 +744,44 @@ mod tests {
         assert_eq!(eics[0].intensities, vec![30.0]);
         assert_eq!(eics[1].times, vec![0.0]);
         assert_eq!(eics[1].intensities, vec![0.0]);
+    }
+
+    #[test]
+    fn portable_eic_regression_keeps_zero_points_for_matching_spectra() {
+        let spectra = vec![
+            make_timed_array_spectrum(
+                "scan=4",
+                1.0,
+                1,
+                &[101.8, 102.1, 103.0],
+                &[12.0, 18.0, 7.0],
+            ),
+            make_timed_peak_spectrum(
+                "scan=5",
+                2.0,
+                1,
+                vec![
+                    CentroidPeak::new(100.0, 5.0, 0),
+                    CentroidPeak::new(103.0, 9.0, 1),
+                ],
+            ),
+            make_timed_array_spectrum(
+                "scan=6",
+                3.0,
+                2,
+                &[101.9, 102.0],
+                &[50.0, 60.0],
+            ),
+        ];
+        let mut source = TrackingSpectrumSource::new(spectra);
+        let query = EICQuery::new(101.5, 102.5).with_ms_level(1);
+
+        let eics = extract_eics_from_spectra(&mut source, &[query]).expect("query should succeed");
+        let eic = &eics[0];
+
+        assert_eq!(source.detail_level, DetailLevel::Full);
+        assert_eq!(source.reads, 3);
+        assert_eq!(eic.times, vec![1.0, 2.0]);
+        assert_eq!(eic.intensities, vec![30.0, 0.0]);
     }
 }
