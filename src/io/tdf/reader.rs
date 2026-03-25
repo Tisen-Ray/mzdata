@@ -10,7 +10,11 @@ use crate::io::checksum_file;
 
 use crate::{
     curie,
-    io::{DetailLevel, IntoIonMobilityFrameSource, IonMobilityFrameAccessError, OffsetIndex},
+    io::{
+        DetailLevel, EICError, EICQuery, ExtractedIonChromatogram,
+        ExtractedIonChromatogramSource, IntoIonMobilityFrameSource,
+        IonMobilityFrameAccessError, OffsetIndex,
+    },
     meta::{
         Component, ComponentType, DataProcessing, DetectorTypeTerm,
         DissociationMethodTerm::CollisionInducedDissociation, FileDescription,
@@ -51,6 +55,7 @@ use super::{
         SQLFrame, SQLPasefFrameMsMs, SQLPrecursor, TDFMSnFacet,
     },
 };
+use crate::io::eic::{initialize_results, prepare_queries, PreparedEICQuery};
 
 const PEAK_MERGE_TOLERANCE: Tolerance = Tolerance::PPM(10.0);
 
@@ -58,6 +63,15 @@ fn inverse_reduce_ion_mobility_param(value: f64) -> Param {
     ControlledVocabulary::MS
         .param_val(1002815, "inverse reduced ion mobility", value)
         .with_unit_t(&Unit::VoltSecondPerSquareCentimeter)
+}
+
+#[derive(Debug, Clone)]
+struct PreparedTDFEICQuery {
+    base: PreparedEICQuery,
+    tof_min: u32,
+    tof_max: u32,
+    scan_start: Option<usize>,
+    scan_end: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -615,6 +629,154 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         })?;
         Ok(handle)
     }
+
+    fn prepare_eic_queries(&self, queries: &[EICQuery]) -> Result<Vec<PreparedTDFEICQuery>, EICError> {
+        let prepared = prepare_queries(queries)?;
+        prepared
+            .into_iter()
+            .map(|query| {
+                let tof_lo = self.metadata.mz_converter.invert(query.mz_min).floor();
+                let tof_hi = self.metadata.mz_converter.invert(query.mz_max).ceil();
+                let (tof_min, tof_max) = if tof_lo <= tof_hi {
+                    (tof_lo, tof_hi)
+                } else {
+                    (tof_hi, tof_lo)
+                };
+                let tof_min = tof_min.max(0.0) as u32;
+                let tof_max = tof_max.max(tof_min as f64) as u32;
+
+                let (scan_start, scan_end) =
+                    if let (Some(mobility_min), Some(mobility_max)) =
+                        (query.mobility_min, query.mobility_max)
+                    {
+                        let scan_lo = self.metadata.im_converter.invert(mobility_min);
+                        let scan_hi = self.metadata.im_converter.invert(mobility_max);
+                        let scan_start = scan_lo.min(scan_hi).floor().max(0.0) as usize;
+                        let scan_end = scan_lo.max(scan_hi).ceil().max(0.0) as usize + 1;
+                        (Some(scan_start), Some(scan_end))
+                    } else {
+                        (None, None)
+                    };
+
+                Ok(PreparedTDFEICQuery {
+                    base: query,
+                    tof_min,
+                    tof_max,
+                    scan_start,
+                    scan_end,
+                })
+            })
+            .collect()
+    }
+
+    fn extract_eics_fast(&self, queries: &[EICQuery]) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        if queries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let prepared = self.prepare_eic_queries(queries)?;
+        let base_queries: Vec<_> = prepared.iter().map(|query| query.base.clone()).collect();
+        let mut results = initialize_results(&base_queries);
+
+        let mut frame_cache: Option<(usize, timsrust::Frame)> = None;
+        for entry in &self.entry_index {
+            let time = entry.frame.time / 60.0;
+            let candidate_queries: Vec<usize> = prepared
+                .iter()
+                .enumerate()
+                .filter_map(|(index, query)| {
+                    let rt_match = query.base.rt_min.map(|rt| time >= rt).unwrap_or(true)
+                        && query.base.rt_max.map(|rt| time <= rt).unwrap_or(true);
+                    let ms_match = query
+                        .base
+                        .ms_level
+                        .map(|ms_level| entry.ms_level() == ms_level)
+                        .unwrap_or(true);
+                    (rt_match && ms_match).then_some(index)
+                })
+                .collect();
+
+            if candidate_queries.is_empty() {
+                continue;
+            }
+
+            let needs_refresh = frame_cache
+                .as_ref()
+                .map(|(frame_id, _)| *frame_id != entry.frame.id)
+                .unwrap_or(true);
+            if needs_refresh {
+                let frame = self
+                    .frame_reader
+                    .get(entry.frame.id.saturating_sub(1))
+                    .map_err(timsrust::TimsRustError::from)?;
+                frame_cache = Some((entry.frame.id, frame));
+            }
+
+            let frame = &frame_cache.as_ref().expect("frame cache should be populated").1;
+            let total_scans = frame.scan_offsets.len().saturating_sub(1);
+            let (entry_scan_start, entry_scan_end) = entry.scan_range();
+
+            for query_index in candidate_queries {
+                let query = &prepared[query_index];
+                let scan_start = query
+                    .scan_start
+                    .unwrap_or(entry_scan_start)
+                    .max(entry_scan_start)
+                    .min(total_scans);
+                let scan_end = query
+                    .scan_end
+                    .unwrap_or(entry_scan_end)
+                    .min(entry_scan_end)
+                    .min(total_scans);
+
+                let intensity = if scan_start >= scan_end {
+                    0.0
+                } else {
+                    sum_tdf_query(frame, &self.metadata, query, scan_start, scan_end)
+                };
+                results[query_index].times.push(time);
+                results[query_index].intensities.push(intensity);
+            }
+        }
+
+        Ok(results)
+    }
+}
+
+fn sum_tdf_query(
+    frame: &timsrust::Frame,
+    metadata: &Metadata,
+    query: &PreparedTDFEICQuery,
+    scan_start: usize,
+    scan_end: usize,
+) -> f32 {
+    let mut total = 0.0f32;
+    for scan_index in scan_start..scan_end {
+        let start = frame.scan_offsets[scan_index];
+        let end = frame.scan_offsets[scan_index + 1];
+        if start >= end {
+            continue;
+        }
+
+        let tof_slice = &frame.tof_indices[start..end];
+        let intensity_slice = &frame.intensities[start..end];
+        let lower = tof_slice.partition_point(|tof| *tof < query.tof_min);
+        let upper = tof_slice.partition_point(|tof| *tof <= query.tof_max);
+        total += tof_slice[lower..upper]
+            .iter()
+            .copied()
+            .zip(intensity_slice[lower..upper].iter().copied())
+            .filter_map(|(tof, intensity)| {
+                let mz = metadata.mz_converter.convert(tof);
+                let intensity = intensity as f32;
+                (mz >= query.base.mz_min
+                    && mz <= query.base.mz_max
+                    && intensity >= query.base.min_intensity)
+                    .then_some(intensity)
+            })
+            .sum::<f32>();
+    }
+    total
 }
 
 // Metadata construction routine
@@ -1147,6 +1309,18 @@ impl<
 
     fn set_detail_level(&mut self, detail_level: DetailLevel) {
         self.frame_reader.set_detail_level(detail_level);
+    }
+}
+
+impl<
+        C: FeatureLike<MZ, IonMobility>,
+        D: FeatureLike<Mass, IonMobility> + KnownCharge,
+        CP: CentroidLike + From<CentroidPeak>,
+        DP: DeconvolutedCentroidLike,
+    > ExtractedIonChromatogramSource<CP, DP> for TDFSpectrumReaderType<C, D, CP, DP>
+{
+    fn extract_eics(&mut self, queries: &[EICQuery]) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        self.frame_reader.extract_eics_fast(queries)
     }
 }
 

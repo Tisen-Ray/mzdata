@@ -28,25 +28,25 @@ mod test {
             </mzML>
         "#;
         assert!(!is_imzml(mzml_content));
-        
+
         // Test with empty/minimal content
         let minimal_content = b"<mzML xmlns=\"http://psi.hupo.org/ms/mzml\"";
         assert!(!is_imzml(minimal_content));
     }
 
-    #[test] 
+    #[test]
     fn test_imzml_reader_type() {
         // This is a basic compilation test to ensure the type is correctly defined
         use std::fs::File;
-        
+
         // The reader should be creatable with the correct type parameters
         let _reader_type = std::marker::PhantomData::<ImzMLReader<File, File>>;
-        
+
         // Test IBD path derivation logic
         let imzml_path = std::path::Path::new("test.imzML");
         let ibd_path_lower = imzml_path.with_extension("ibd");
         let ibd_path_upper = imzml_path.with_extension("IBD");
-        
+
         assert_eq!(ibd_path_lower, std::path::Path::new("test.ibd"));
         assert_eq!(ibd_path_upper, std::path::Path::new("test.IBD"));
     }

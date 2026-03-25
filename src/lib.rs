@@ -127,7 +127,10 @@ pub mod prelude;
 pub mod spectrum;
 pub mod utils;
 
-pub use crate::io::{MZReader, MZReaderBuilder};
+pub use crate::io::{
+    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource, MZReader,
+    MZReaderBuilder,
+};
 #[cfg(feature = "mgf")]
 pub use crate::io::mgf::{MGFReader, MGFWriter};
 #[cfg(feature = "mzml")]

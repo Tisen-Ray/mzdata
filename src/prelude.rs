@@ -7,6 +7,9 @@ pub use crate::io::traits::{
     IonMobilityFrameWriter, RandomAccessIonMobilityFrameGroupingIterator,
     IntoIonMobilityFrameSource,
 };
+pub use crate::io::{
+    EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
+};
 
 #[cfg(feature = "async_partial")]
 pub use crate::io::traits::AsyncSpectrumSource;

@@ -34,6 +34,8 @@ use crate::io::thermo::ThermoRawReaderType;
 use crate::io::tdf::{TDFSpectrumReaderType, TDFFrameReaderType};
 
 use crate::io::traits::{ChromatogramSource, StreamingSpectrumIterator};
+use crate::io::{EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource};
+use super::super::eic::extract_eics_from_spectra;
 use crate::io::{DetailLevel, SpectrumSourceWithMetadata};
 
 use super::{infer_format, infer_from_stream, MassSpectrometryFormat};
@@ -690,6 +692,31 @@ impl<C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
 
     fn set_detail_level(&mut self, detail_level: DetailLevel) {
         self.set_detail_level(detail_level);
+    }
+}
+
+impl<
+        R: io::Read + io::Seek,
+        C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
+        D: DeconvolutedCentroidLike + From<DeconvolutedPeak> + BuildFromArrayMap,
+    > ExtractedIonChromatogramSource<C, D, MultiLayerSpectrum<C, D>> for MZReaderType<R, C, D>
+{
+    fn extract_eics(&mut self, queries: &[EICQuery]) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        match self {
+            #[cfg(feature = "mzml")]
+            MZReaderType::MzML(reader) => reader.extract_eics(queries),
+            #[cfg(feature = "mgf")]
+            MZReaderType::MGF(reader) => reader.extract_eics(queries),
+            #[cfg(feature = "thermo")]
+            MZReaderType::ThermoRaw(reader) => reader.extract_eics(queries),
+            #[cfg(feature = "mzmlb")]
+            MZReaderType::MzMLb(reader) => reader.extract_eics(queries),
+            #[cfg(feature = "imzml")]
+            MZReaderType::IMzML(reader) => extract_eics_from_spectra(reader, queries),
+            #[cfg(feature = "bruker_tdf")]
+            MZReaderType::BrukerTDF(reader) => reader.extract_eics(queries),
+            MZReaderType::Unknown(reader, _) => extract_eics_from_spectra(reader.as_mut(), queries),
+        }
     }
 }
 

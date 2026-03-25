@@ -4,6 +4,7 @@
 //!
 
 mod infer_format;
+mod eic;
 pub mod mgf;
 pub mod mzml;
 #[cfg(feature = "mzmlb")]
@@ -22,6 +23,9 @@ pub(crate) mod compression;
 pub use crate::io::infer_format::{
     infer_format, infer_from_path, infer_from_stream, IMMZReaderType, MZReader, MZReaderBuilder,
     MZReaderType, MassSpectrometryFormat, MassSpectrometryReadWriteProcess, Sink, Source,
+};
+pub use crate::io::eic::{
+    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
 };
 
 #[cfg(feature = "mgf")]
