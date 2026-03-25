@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 2
 current_phase_name: portable spectrum eic engine
-current_plan: Not started
-status: planning
-stopped_at: Phase 2 context gathered
-last_updated: "2026-03-25T06:37:53.012Z"
-last_activity: 2026-03-25 - Plan 01-02 executed for the public EIC export/discoverability pass.
+current_plan: "02"
+status: executing
+stopped_at: Executing 02-02-PLAN.md
+last_updated: "2026-03-25T08:29:44.661Z"
+last_activity: 2026-03-25 - Plan 02-01 established the lazy portable EIC fallback and interval-aware regression coverage.
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 100
+  total_plans: 4
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State
@@ -31,19 +31,20 @@ code.
 ## Current Position
 
 **Phase:** 2 of 4 (Portable Spectrum EIC Engine)
-**Plan:** Not started
-**Status:** Ready to plan
-**Last activity:** 2026-03-25 - Plan 01-02 executed for the public EIC export/discoverability pass.
-**Progress:** [██████████] 100%
+**Plan:** 02 of 02 (reader-facing regression anchor)
+**Status:** Executing phase
+**Last activity:** 2026-03-25 - Plan 02-01 established the lazy portable EIC fallback and interval-aware regression coverage.
+**Progress:** [████████░░] 75%
 
 **Current Phase:** 2
 **Current Phase Name:** portable spectrum eic engine
 **Total Phases:** 4
-**Current Plan:** Not started
-**Total Plans in Phase:** TBD
+**Current Plan:** 02
+**Total Plans in Phase:** 2
 **Last Activity:** 2026-03-25
-**Last Activity Description:** Phase 01 completed and the project transitioned
-to Phase 2 for the portable spectrum EIC engine work.
+**Last Activity Description:** Plan 02-01 completed with an explicit lazy
+portable extraction loop, ordered-array narrowing helper, and focused
+regression tests.
 
 ## Accumulated Context
 
@@ -65,6 +66,7 @@ Decisions are logged in `.planning/PROJECT.md`. Current milestone assumptions:
 - Phase 1 keeps `src/io/eic.rs` as a focused standalone module with normal
   re-exports.
 - [Phase 1]: Kept the public EIC surface flat across io, crate root, and prelude — This preserves additive discoverability and avoids adding any extra export layer.
+- [Phase 2]: Kept the portable fallback as a refinement of `extract_eics_from_spectra` with local lazy execution and ordered-array bounds rather than introducing a new abstraction layer.
 
 ### Pending Todos
 
@@ -86,6 +88,6 @@ None yet.
 
 ## Session
 
-**Last Date:** 2026-03-25T06:37:53.009Z
-**Stopped At:** Phase 2 context gathered
-**Resume File:** .planning/phases/02-portable-spectrum-eic-engine/02-CONTEXT.md
+**Last Date:** 2026-03-25T08:29:44.657Z
+**Stopped At:** Executing 02-02-PLAN.md
+**Resume File:** .planning/phases/02-portable-spectrum-eic-engine/02-02-PLAN.md

@@ -13,9 +13,9 @@ code.
   public API that works across supported `MZReader` backends.
 - [x] **EIC-02**: The shared EIC query type supports at least `m/z` range and
   optional RT, MS level, and mobility filtering.
-- [ ] **EIC-03**: The default cross-format EIC path reads spectra on demand
+- [x] **EIC-03**: The default cross-format EIC path reads spectra on demand
   instead of materializing the entire source file up front.
-- [ ] **EIC-04**: When ordered `m/z` arrays are available, the shared EIC path
+- [x] **EIC-04**: When ordered `m/z` arrays are available, the shared EIC path
   uses binary search to restrict work to the matching interval instead of
   linearly scanning the full array.
 - [ ] **EIC-05**: Format-specific optimizations, such as Bruker TDF fast paths,
@@ -83,8 +83,8 @@ code.
 | EIC-01 | Phase 1 - Public EIC Surface | Complete |
 | EIC-02 | Phase 1 - Public EIC Surface | Complete |
 | ARCH-01 | Phase 1 - Public EIC Surface | Complete |
-| EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
-| EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Pending |
+| EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Complete |
+| EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Complete |
 | TEST-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
 | EIC-05 | Phase 3 - Additive Backend Integration | Pending |
 | ARCH-02 | Phase 3 - Additive Backend Integration | Pending |

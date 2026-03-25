@@ -50,7 +50,7 @@ over ordered `m/z` arrays.
    matching interval by binary search before summing intensities.
 3. A lightweight expected-result regression check exists for the shared
    extraction logic so obvious query/filtering mistakes are detectable.
-**Plans:** TBD
+**Plans:** 1/2 plans complete
 
 ### Phase 3: Additive Backend Integration
 **Goal:** Hide format-specific accelerations behind the same public EIC surface
@@ -90,6 +90,6 @@ dataset.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Public EIC Surface | 2/2 | Complete   | 2026-03-25 |
-| 2. Portable Spectrum EIC Engine | 0/TBD | Not started | - |
+| 2. Portable Spectrum EIC Engine | 1/2 | In Progress | - |
 | 3. Additive Backend Integration | 0/TBD | Not started | - |
 | 4. Docs and Feasibility Validation | 0/TBD | Not started | - |
