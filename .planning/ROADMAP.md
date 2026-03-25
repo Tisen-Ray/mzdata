@@ -13,8 +13,9 @@ explicitly deferred until this EIC foundation is stable.
 
 - [x] **Phase 1: Public EIC Surface** - establish the shared public query and
   trait layout for cross-format callers. (completed 2026-03-25)
-- [ ] **Phase 2: Portable Spectrum EIC Engine** - implement the common lazy,
-  binary-search extraction path and a simple regression anchor.
+- [x] **Phase 2: Portable Spectrum EIC Engine** - implement the common lazy,
+  binary-search extraction path and a simple regression anchor. (completed
+  2026-03-25)
 - [ ] **Phase 3: Additive Backend Integration** - preserve compatibility while
   hiding backend-specific accelerations behind the same API.
 - [ ] **Phase 4: Docs and Feasibility Validation** - document the chosen model
@@ -50,7 +51,7 @@ over ordered `m/z` arrays.
    matching interval by binary search before summing intensities.
 3. A lightweight expected-result regression check exists for the shared
    extraction logic so obvious query/filtering mistakes are detectable.
-**Plans:** 1/2 plans complete
+**Plans:** 2/2 plans complete
 
 ### Phase 3: Additive Backend Integration
 **Goal:** Hide format-specific accelerations behind the same public EIC surface
@@ -90,6 +91,6 @@ dataset.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Public EIC Surface | 2/2 | Complete   | 2026-03-25 |
-| 2. Portable Spectrum EIC Engine | 1/2 | In Progress | - |
+| 2. Portable Spectrum EIC Engine | 2/2 | Complete   | 2026-03-25 |
 | 3. Additive Backend Integration | 0/TBD | Not started | - |
 | 4. Docs and Feasibility Validation | 0/TBD | Not started | - |

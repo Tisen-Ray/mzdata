@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 2
 current_phase_name: portable spectrum eic engine
-current_plan: "02"
-status: executing
-stopped_at: Executing 02-02-PLAN.md
-last_updated: "2026-03-25T08:29:44.661Z"
-last_activity: 2026-03-25 - Plan 02-01 established the lazy portable EIC fallback and interval-aware regression coverage.
+current_plan: 02
+status: verifying
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-25T08:41:12.702Z"
+last_activity: 2026-03-25
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State
@@ -32,9 +32,9 @@ code.
 
 **Phase:** 2 of 4 (Portable Spectrum EIC Engine)
 **Plan:** 02 of 02 (reader-facing regression anchor)
-**Status:** Executing phase
-**Last activity:** 2026-03-25 - Plan 02-01 established the lazy portable EIC fallback and interval-aware regression coverage.
-**Progress:** [████████░░] 75%
+**Status:** Phase complete — ready for verification
+**Last activity:** 2026-03-25
+**Progress:** [██████████] 100%
 
 **Current Phase:** 2
 **Current Phase Name:** portable spectrum eic engine
@@ -42,9 +42,10 @@ code.
 **Current Plan:** 02
 **Total Plans in Phase:** 2
 **Last Activity:** 2026-03-25
-**Last Activity Description:** Plan 02-01 completed with an explicit lazy
-portable extraction loop, ordered-array narrowing helper, and focused
-regression tests.
+**Last Activity Description:** Plan 02-02 added a synthetic portable EIC
+regression anchor plus a public reader-facing expected-result test, keeping the
+shared lazy extraction path and zero-intensity chromatogram shape under
+regression coverage.
 
 ## Accumulated Context
 
@@ -67,6 +68,8 @@ Decisions are logged in `.planning/PROJECT.md`. Current milestone assumptions:
   re-exports.
 - [Phase 1]: Kept the public EIC surface flat across io, crate root, and prelude — This preserves additive discoverability and avoids adding any extra export layer.
 - [Phase 2]: Kept the portable fallback as a refinement of `extract_eics_from_spectra` with local lazy execution and ordered-array bounds rather than introducing a new abstraction layer.
+- [Phase 02-portable-spectrum-eic-engine]: Kept the regression anchor synthetic and deterministic instead of adding a fixture-heavy harness. — This keeps the failure mode focused on chromatogram-shape drift and avoids brittle dataset dependencies.
+- [Phase 02-portable-spectrum-eic-engine]: Reused the public reader-facing test neighborhood with a generic manual_extract helper rather than introducing a new abstraction layer. — This keeps the expected-result check close to the production extract_eic API while avoiding duplicated test scaffolding.
 
 ### Pending Todos
 
@@ -86,8 +89,12 @@ None yet.
 - 2026-03-25: Initial v1 roadmap created with 4 phases focused on unified
   public EIC access.
 
+## Performance Metrics
+
+- 2026-03-25 plan 02-02: 9m, 3 tasks, 6 files modified
+
 ## Session
 
-**Last Date:** 2026-03-25T08:29:44.657Z
-**Stopped At:** Executing 02-02-PLAN.md
-**Resume File:** .planning/phases/02-portable-spectrum-eic-engine/02-02-PLAN.md
+**Last Date:** 2026-03-25T08:41:12.702Z
+**Stopped At:** Completed 02-02-PLAN.md
+**Resume File:** None

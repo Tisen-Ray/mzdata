@@ -46,7 +46,7 @@ code.
   exercises the shared EIC API against a real dataset.
 - [ ] **TEST-02**: A lightweight test or validation flow confirms feasibility
   using `C:\Users\ray\Desktop\20241005-TDP-CYTO-C-1.raw`.
-- [ ] **TEST-03**: The EIC implementation is checked against at least one simple
+- [x] **TEST-03**: The EIC implementation is checked against at least one simple
   expected-result path so maintainers can detect obvious regressions.
 
 ## v2 Requirements
@@ -85,7 +85,7 @@ code.
 | ARCH-01 | Phase 1 - Public EIC Surface | Complete |
 | EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Complete |
 | EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Complete |
-| TEST-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
+| TEST-03 | Phase 2 - Portable Spectrum EIC Engine | Complete |
 | EIC-05 | Phase 3 - Additive Backend Integration | Pending |
 | ARCH-02 | Phase 3 - Additive Backend Integration | Pending |
 | ARCH-03 | Phase 3 - Additive Backend Integration | Pending |
