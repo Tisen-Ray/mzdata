@@ -80,26 +80,26 @@ code.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EIC-01 | Phase TBD | Pending |
-| EIC-02 | Phase TBD | Pending |
-| EIC-03 | Phase TBD | Pending |
-| EIC-04 | Phase TBD | Pending |
-| EIC-05 | Phase TBD | Pending |
-| ARCH-01 | Phase TBD | Pending |
-| ARCH-02 | Phase TBD | Pending |
-| ARCH-03 | Phase TBD | Pending |
-| DOCS-01 | Phase TBD | Pending |
-| DOCS-02 | Phase TBD | Pending |
-| DOCS-03 | Phase TBD | Pending |
-| TEST-01 | Phase TBD | Pending |
-| TEST-02 | Phase TBD | Pending |
-| TEST-03 | Phase TBD | Pending |
+| EIC-01 | Phase 1 - Public EIC Surface | Pending |
+| EIC-02 | Phase 1 - Public EIC Surface | Pending |
+| ARCH-01 | Phase 1 - Public EIC Surface | Pending |
+| EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
+| EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Pending |
+| TEST-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
+| EIC-05 | Phase 3 - Additive Backend Integration | Pending |
+| ARCH-02 | Phase 3 - Additive Backend Integration | Pending |
+| ARCH-03 | Phase 3 - Additive Backend Integration | Pending |
+| DOCS-01 | Phase 4 - Docs and Feasibility Validation | Pending |
+| DOCS-02 | Phase 4 - Docs and Feasibility Validation | Pending |
+| DOCS-03 | Phase 4 - Docs and Feasibility Validation | Pending |
+| TEST-01 | Phase 4 - Docs and Feasibility Validation | Pending |
+| TEST-02 | Phase 4 - Docs and Feasibility Validation | Pending |
 
 **Coverage:**
 - v1 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14 ⚠️
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-25*
-*Last updated: 2026-03-25 after initial definition*
+*Last updated: 2026-03-25 after roadmap traceability mapping*
