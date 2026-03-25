@@ -14,7 +14,10 @@ pub use pipeline::{MassSpectrometryReadWriteProcess, Source, Sink};
 
 #[cfg(test)]
 mod test {
-    use std::{fs, io, path, time::Instant};
+    use std::{fs, io, path};
+
+    #[cfg(feature = "bruker_tdf")]
+    use std::time::Instant;
 
     use mzpeaks::{CentroidPeak, DeconvolutedPeak, IntensityMeasurement, MZLocated};
 
@@ -82,6 +85,7 @@ mod test {
         points
     }
 
+    #[cfg(feature = "bruker_tdf")]
     fn peak_queries_from_first_ms1(
         reader: &mut MZReader<std::fs::File>,
         count: usize,
@@ -135,6 +139,7 @@ mod test {
         result
     }
 
+    #[cfg(feature = "bruker_tdf")]
     fn bruker_desktop_datasets() -> [std::path::PathBuf; 2] {
         let data_dir = path::Path::new(r"C:\Users\ray\Desktop\MS_Data_20260318");
         [
@@ -250,6 +255,24 @@ mod test {
         assert!(matches!(rs, Source::Reader(_, _)));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_eic_query_builder_carries_the_full_phase_one_filter_set() {
+        let query = EICQuery::new(650.0, 651.0)
+            .with_rt_range(10.0, 12.5)
+            .with_ms_level(2)
+            .with_mobility_range(1.1, 1.4)
+            .with_min_intensity(42.0);
+
+        assert_eq!(query.mz_min, 650.0);
+        assert_eq!(query.mz_max, 651.0);
+        assert_eq!(query.rt_min, Some(10.0));
+        assert_eq!(query.rt_max, Some(12.5));
+        assert_eq!(query.ms_level, Some(2));
+        assert_eq!(query.mobility_min, Some(1.1));
+        assert_eq!(query.mobility_max, Some(1.4));
+        assert_eq!(query.min_intensity, Some(42.0_f32));
     }
 
     #[cfg(feature = "mzml")]

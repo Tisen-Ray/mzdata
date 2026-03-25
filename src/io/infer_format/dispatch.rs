@@ -695,6 +695,9 @@ impl<C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
     }
 }
 
+/// Forward the shared EIC reader trait through the format-dispatch wrapper so
+/// callers keep using the normal `reader.extract_eic(...)` / `extract_eics(...)`
+/// style.
 impl<
         R: io::Read + io::Seek,
         C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,

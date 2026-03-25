@@ -21,19 +21,34 @@ use crate::io::mzmlb::MzMLbReaderType;
 use crate::io::thermo::ThermoRawReaderType;
 use crate::prelude::SeekRead;
 
+/// Public query contract for extracted ion chromatograms.
+///
+/// The Phase 1 surface keeps the required `m/z` window front and center and
+/// layers optional RT, MS level, mobility, and minimum-intensity filtering on
+/// top of that shared reader-native entry point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EICQuery {
+    /// Required lower bound for the `m/z` window.
     pub mz_min: f64,
+    /// Required upper bound for the `m/z` window.
     pub mz_max: f64,
+    /// Optional lower retention-time bound.
     pub rt_min: Option<f64>,
+    /// Optional upper retention-time bound.
     pub rt_max: Option<f64>,
+    /// Optional MS level filter.
     pub ms_level: Option<u8>,
+    /// Optional lower ion-mobility bound.
     pub mobility_min: Option<f64>,
+    /// Optional upper ion-mobility bound.
     pub mobility_max: Option<f64>,
+    /// Optional minimum per-point intensity threshold.
     pub min_intensity: Option<f32>,
 }
 
 impl EICQuery {
+    /// Create a query for the required `m/z` range.
+    #[must_use]
     pub fn new(mz_min: f64, mz_max: f64) -> Self {
         Self {
             mz_min,
@@ -47,23 +62,31 @@ impl EICQuery {
         }
     }
 
+    /// Add an optional retention-time range.
+    #[must_use]
     pub fn with_rt_range(mut self, rt_min: f64, rt_max: f64) -> Self {
         self.rt_min = Some(rt_min);
         self.rt_max = Some(rt_max);
         self
     }
 
+    /// Restrict the query to a single MS level.
+    #[must_use]
     pub fn with_ms_level(mut self, ms_level: u8) -> Self {
         self.ms_level = Some(ms_level);
         self
     }
 
+    /// Add an optional ion-mobility range.
+    #[must_use]
     pub fn with_mobility_range(mut self, mobility_min: f64, mobility_max: f64) -> Self {
         self.mobility_min = Some(mobility_min);
         self.mobility_max = Some(mobility_max);
         self
     }
 
+    /// Add an optional minimum intensity threshold.
+    #[must_use]
     pub fn with_min_intensity(mut self, min_intensity: f32) -> Self {
         self.min_intensity = Some(min_intensity);
         self
@@ -97,14 +120,24 @@ impl EICQuery {
     }
 }
 
+/// Computed EIC results returned by the reader-native extraction API.
+///
+/// The output stays distinct from file-native chromatogram objects because it is
+/// a derived view built from a query rather than a source artifact loaded from
+/// disk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedIonChromatogram {
+    /// The query that produced this extracted trace.
     pub query: EICQuery,
+    /// Retention times for the extracted trace.
     pub times: Vec<f64>,
+    /// Summed intensities aligned with `times`.
     pub intensities: Vec<f32>,
 }
 
 impl ExtractedIonChromatogram {
+    /// Create an empty chromatogram shell for a query.
+    #[must_use]
     pub fn new(query: EICQuery) -> Self {
         Self {
             query,
@@ -114,6 +147,7 @@ impl ExtractedIonChromatogram {
     }
 }
 
+/// Errors raised by the shared EIC extraction surface.
 #[derive(Debug, Error)]
 pub enum EICError {
     #[error("{0}")]
@@ -125,17 +159,24 @@ pub enum EICError {
     TimsRust(#[from] timsrust::TimsRustError),
 }
 
+/// Reader-native EIC extraction for `MZReader`-style types.
+///
+/// Callers keep the normal reader workflow and invoke `extract_eic` or
+/// `extract_eics` on the reader itself, while backends decide how to satisfy the
+/// shared query contract.
 pub trait ExtractedIonChromatogramSource<
     C: CentroidLike = CentroidPeak,
     D: DeconvolutedCentroidLike = DeconvolutedPeak,
     S: SpectrumLike<C, D> = MultiLayerSpectrum<C, D>,
 >: SpectrumSource<C, D, S>
 {
+    /// Extract a batch of chromatograms for the supplied queries.
     fn extract_eics(
         &mut self,
         queries: &[EICQuery],
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError>;
 
+    /// Extract a single chromatogram through the shared batch entry point.
     fn extract_eic(&mut self, query: &EICQuery) -> Result<ExtractedIonChromatogram, EICError> {
         self.extract_eics(std::slice::from_ref(query))
             .map(|mut eics| eics.remove(0))
@@ -412,5 +453,41 @@ impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone
         queries: &[EICQuery],
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         extract_eics_from_spectra(self, queries)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_builder_preserves_the_full_phase_one_filter_set() {
+        let query = EICQuery::new(501.5, 500.5)
+            .with_rt_range(12.5, 10.0)
+            .with_ms_level(2)
+            .with_mobility_range(1.4, 1.1)
+            .with_min_intensity(42.0);
+
+        let prepared = query.prepare().expect("query should be valid");
+
+        assert_eq!(prepared.query, query);
+        assert_eq!(prepared.mz_min, 500.5);
+        assert_eq!(prepared.mz_max, 501.5);
+        assert_eq!(prepared.rt_min, Some(10.0));
+        assert_eq!(prepared.rt_max, Some(12.5));
+        assert_eq!(prepared.ms_level, Some(2));
+        assert_eq!(prepared.mobility_min, Some(1.1));
+        assert_eq!(prepared.mobility_max, Some(1.4));
+        assert_eq!(prepared.min_intensity, 42.0_f32);
+    }
+
+    #[test]
+    fn extracted_chromatogram_keeps_the_query_and_starts_empty() {
+        let query = EICQuery::new(100.0, 101.0);
+        let chromatogram = ExtractedIonChromatogram::new(query.clone());
+
+        assert_eq!(chromatogram.query, query);
+        assert!(chromatogram.times.is_empty());
+        assert!(chromatogram.intensities.is_empty());
     }
 }

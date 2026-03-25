@@ -12,21 +12,21 @@ code.
 ## Current Position
 
 **Phase:** 1 of 4 (Public EIC Surface)
-**Plan:** 0 of 0 in current phase
+**Plan:** 1 of 2 in current phase
 **Status:** Ready to plan
-**Last activity:** 2026-03-25 - Phase 1 context captured for the public EIC
-surface.
-**Progress:** 0%
+**Last activity:** 2026-03-25 - Plan 01-01 executed for the public EIC
+surface and the focused reader-surface tests passed.
+**Progress:** 50%
 
 **Current Phase:** 1
 **Current Phase Name:** Public EIC Surface
 **Total Phases:** 4
-**Current Plan:** 0
-**Total Plans in Phase:** 0
+**Current Plan:** 1
+**Total Plans in Phase:** 2
 **Last Activity:** 2026-03-25
-**Last Activity Description:** Phase 1 context captured, including the selected
-reader-trait EIC API shape, dedicated extracted result type, bounded query
-surface, and flat `src/io/eic.rs` module strategy.
+**Last Activity Description:** Plan 01-01 finalized the public EIC contract,
+kept the reader-native entry points explicit, and added focused query/result
+contract coverage.
 
 ## Accumulated Context
 
@@ -69,6 +69,6 @@ None yet.
 ## Session
 
 **Last Date:** 2026-03-25 13:28
-**Stopped At:** Phase 1 context gathered and committed; next step is planning
-Phase 1.
+**Stopped At:** Plan 01-01 completed; next step is Plan 01-02 for export
+surface discoverability.
 **Resume File:** .planning/phases/01-public-eic-surface/01-CONTEXT.md
