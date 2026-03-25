@@ -11,7 +11,7 @@ code.
 
 - [x] **EIC-01**: Caller can request an extracted ion chromatogram through one
   public API that works across supported `MZReader` backends.
-- [ ] **EIC-02**: The shared EIC query type supports at least `m/z` range and
+- [x] **EIC-02**: The shared EIC query type supports at least `m/z` range and
   optional RT, MS level, and mobility filtering.
 - [ ] **EIC-03**: The default cross-format EIC path reads spectra on demand
   instead of materializing the entire source file up front.
@@ -81,7 +81,7 @@ code.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | EIC-01 | Phase 1 - Public EIC Surface | Complete |
-| EIC-02 | Phase 1 - Public EIC Surface | Pending |
+| EIC-02 | Phase 1 - Public EIC Surface | Complete |
 | ARCH-01 | Phase 1 - Public EIC Surface | Complete |
 | EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
 | EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Pending |
