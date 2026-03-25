@@ -7,8 +7,9 @@ pub use crate::io::traits::{
     IonMobilityFrameWriter, RandomAccessIonMobilityFrameGroupingIterator,
     IntoIonMobilityFrameSource,
 };
+/// Prelude exposure for the shared reader-native EIC query, result, and trait surface.
 pub use crate::io::{
-    EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
+    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
 };
 
 #[cfg(feature = "async_partial")]

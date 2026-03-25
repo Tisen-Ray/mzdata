@@ -1,6 +1,8 @@
 //! Reading and writing mass spectrometry data file formats and abstractions over them.
 //!
 //! There are many data file formats for recording mass spectrometry data.
+//! The public EIC reader surface is exported here and mirrored at the crate
+//! root and in `mzdata::prelude` for the usual reader-centric entry points.
 //!
 
 mod infer_format;
@@ -24,6 +26,10 @@ pub use crate::io::infer_format::{
     infer_format, infer_from_path, infer_from_stream, IMMZReaderType, MZReader, MZReaderBuilder,
     MZReaderType, MassSpectrometryFormat, MassSpectrometryReadWriteProcess, Sink, Source,
 };
+/// Reader-native EIC query, result, and trait exports.
+///
+/// Extracted ion chromatograms are computed views returned through reader APIs,
+/// not file-native chromatogram objects.
 pub use crate::io::eic::{
     EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
 };

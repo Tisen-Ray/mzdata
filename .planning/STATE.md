@@ -1,3 +1,22 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+current_phase: 1
+current_phase_name: Public EIC Surface
+current_plan: 2
+status: executing
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-03-25T06:23:14.537Z"
+last_activity: 2026-03-25
+progress:
+  total_phases: 4
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
+  percent: 100
+---
+
 # Project State
 
 ## Project Reference
@@ -12,21 +31,20 @@ code.
 ## Current Position
 
 **Phase:** 1 of 4 (Public EIC Surface)
-**Plan:** 1 of 2 in current phase
-**Status:** Ready to plan
-**Last activity:** 2026-03-25 - Plan 01-01 executed for the public EIC
-surface and the focused reader-surface tests passed.
-**Progress:** 50%
+**Plan:** 2 of 2 in current phase
+**Status:** Phase complete - ready for verification
+**Last activity:** 2026-03-25 - Plan 01-02 executed for the public EIC export/discoverability pass.
+**Progress:** [██████████] 100%
 
 **Current Phase:** 1
 **Current Phase Name:** Public EIC Surface
 **Total Phases:** 4
-**Current Plan:** 1
+**Current Plan:** 2
 **Total Plans in Phase:** 2
 **Last Activity:** 2026-03-25
-**Last Activity Description:** Plan 01-01 finalized the public EIC contract,
-kept the reader-native entry points explicit, and added focused query/result
-contract coverage.
+**Last Activity Description:** Plan 01-02 finalized the public EIC export/discoverability pass,
+mirrored the reader-native EIC surface across io/crate root/prelude, and added
+discoverability cues.
 
 ## Accumulated Context
 
@@ -47,6 +65,7 @@ Decisions are logged in `.planning/PROJECT.md`. Current milestone assumptions:
   level, mobility, and minimum intensity only.
 - Phase 1 keeps `src/io/eic.rs` as a focused standalone module with normal
   re-exports.
+- [Phase 1]: Kept the public EIC surface flat across io, crate root, and prelude — This preserves additive discoverability and avoids adding any extra export layer.
 
 ### Pending Todos
 
@@ -68,7 +87,7 @@ None yet.
 
 ## Session
 
-**Last Date:** 2026-03-25 13:28
-**Stopped At:** Plan 01-01 completed; next step is Plan 01-02 for export
+**Last Date:** 2026-03-25T06:23:09.619Z
+**Stopped At:** Completed 01-02-PLAN.md
 surface discoverability.
-**Resume File:** .planning/phases/01-public-eic-surface/01-CONTEXT.md
+**Resume File:** None

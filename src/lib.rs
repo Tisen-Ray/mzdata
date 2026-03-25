@@ -20,6 +20,7 @@
 //! Conventional dispatch is possible through [`MZReader`]. The [`mz_read`] macro provides a convenient means of working with
 //! a value with zero added overhead, but with a limited scope. The [`mz_write`] macro is the equivalent for opening a writer.
 //! There are additional tools for dealing with file format dispatch in [`MassSpectrometryReadWriteProcess`](crate::io::MassSpectrometryReadWriteProcess).
+//! The public EIC query surface is also available from [`mzdata::io`] and [`mzdata::prelude`] so reader-centric callers can find it from the usual paths.
 //!
 //! It also includes a set of representation layers for spectra in [`mzdata::spectrum`](crate::spectrum)
 //!
@@ -127,10 +128,12 @@ pub mod prelude;
 pub mod spectrum;
 pub mod utils;
 
+/// Crate-root access to the reader-native EIC query, result, and trait surface.
 pub use crate::io::{
-    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource, MZReader,
-    MZReaderBuilder,
+    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
 };
+
+pub use crate::io::{MZReader, MZReaderBuilder};
 #[cfg(feature = "mgf")]
 pub use crate::io::mgf::{MGFReader, MGFWriter};
 #[cfg(feature = "mzml")]

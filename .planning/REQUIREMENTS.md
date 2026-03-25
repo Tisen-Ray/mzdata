@@ -9,7 +9,7 @@ code.
 
 ### EIC API
 
-- [ ] **EIC-01**: Caller can request an extracted ion chromatogram through one
+- [x] **EIC-01**: Caller can request an extracted ion chromatogram through one
   public API that works across supported `MZReader` backends.
 - [ ] **EIC-02**: The shared EIC query type supports at least `m/z` range and
   optional RT, MS level, and mobility filtering.
@@ -23,7 +23,7 @@ code.
 
 ### Architecture
 
-- [ ] **ARCH-01**: The new analytical extraction code fits naturally into the
+- [x] **ARCH-01**: The new analytical extraction code fits naturally into the
   existing trait and module structure without making the reader hierarchy harder
   to understand.
 - [ ] **ARCH-02**: Existing spectrum and frame access APIs continue to behave as
@@ -80,9 +80,9 @@ code.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EIC-01 | Phase 1 - Public EIC Surface | Pending |
+| EIC-01 | Phase 1 - Public EIC Surface | Complete |
 | EIC-02 | Phase 1 - Public EIC Surface | Pending |
-| ARCH-01 | Phase 1 - Public EIC Surface | Pending |
+| ARCH-01 | Phase 1 - Public EIC Surface | Complete |
 | EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |
 | EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Pending |
 | TEST-03 | Phase 2 - Portable Spectrum EIC Engine | Pending |

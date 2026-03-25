@@ -11,8 +11,8 @@ explicitly deferred until this EIC foundation is stable.
 
 ## Phases
 
-- [ ] **Phase 1: Public EIC Surface** - establish the shared public query and
-  trait layout for cross-format callers.
+- [x] **Phase 1: Public EIC Surface** - establish the shared public query and
+  trait layout for cross-format callers. (completed 2026-03-25)
 - [ ] **Phase 2: Portable Spectrum EIC Engine** - implement the common lazy,
   binary-search extraction path and a simple regression anchor.
 - [ ] **Phase 3: Additive Backend Integration** - preserve compatibility while
@@ -35,7 +35,7 @@ architecture.
    mobility filtering.
 3. The new analytical extraction traits/modules sit in a clear additive
    location that preserves the current reader hierarchy.
-**Plans:** TBD
+**Plans:** 2/2 plans complete
 
 ### Phase 2: Portable Spectrum EIC Engine
 **Goal:** Make the default cross-format EIC implementation match the chosen
@@ -89,7 +89,7 @@ dataset.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Public EIC Surface | 1/2 | In progress | 01-01 |
+| 1. Public EIC Surface | 2/2 | Complete   | 2026-03-25 |
 | 2. Portable Spectrum EIC Engine | 0/TBD | Not started | - |
 | 3. Additive Backend Integration | 0/TBD | Not started | - |
 | 4. Docs and Feasibility Validation | 0/TBD | Not started | - |
