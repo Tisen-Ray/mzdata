@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 2
-current_phase_name: portable spectrum eic engine
-current_plan: 02
-status: verifying
+current_phase: 3
+current_phase_name: additive backend integration
+current_plan: Not started
+status: planning
 stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-25T08:41:12.702Z"
+last_updated: "2026-03-25T08:43:42.470Z"
 last_activity: 2026-03-25
 progress:
   total_phases: 4
@@ -26,26 +26,24 @@ See: `.planning/PROJECT.md` (updated 2026-03-25)
 **Core value:** A caller can extract targeted analytical traces through one
 clean API without loading the whole file or writing format-specific extraction
 code.
-**Current focus:** Phase 2 - Portable Spectrum EIC Engine
+**Current focus:** Phase 3 - Additive Backend Integration
 
 ## Current Position
 
-**Phase:** 2 of 4 (Portable Spectrum EIC Engine)
-**Plan:** 02 of 02 (reader-facing regression anchor)
-**Status:** Phase complete — ready for verification
+**Phase:** 3 of 4 (Additive Backend Integration)
+**Plan:** Not started
+**Status:** Ready to plan
 **Last activity:** 2026-03-25
 **Progress:** [██████████] 100%
 
-**Current Phase:** 2
-**Current Phase Name:** portable spectrum eic engine
+**Current Phase:** 3
+**Current Phase Name:** additive backend integration
 **Total Phases:** 4
-**Current Plan:** 02
-**Total Plans in Phase:** 2
+**Current Plan:** Not started
+**Total Plans in Phase:** TBD
 **Last Activity:** 2026-03-25
-**Last Activity Description:** Plan 02-02 added a synthetic portable EIC
-regression anchor plus a public reader-facing expected-result test, keeping the
-shared lazy extraction path and zero-intensity chromatogram shape under
-regression coverage.
+**Last Activity Description:** Phase 02 completed and the project transitioned
+to Phase 3 for additive backend integration work.
 
 ## Accumulated Context
 
@@ -95,6 +93,6 @@ None yet.
 
 ## Session
 
-**Last Date:** 2026-03-25T08:41:12.702Z
-**Stopped At:** Completed 02-02-PLAN.md
-**Resume File:** None
+**Last Date:** 2026-03-25T08:43:42.470Z
+**Stopped At:** Phase 02 complete, ready to plan Phase 03
+**Resume File:** .planning/ROADMAP.md
