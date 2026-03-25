@@ -266,20 +266,32 @@ pub(crate) fn extract_eics_from_spectra<
 
     let prepared = prepare_queries(queries)?;
     let mut results = initialize_results(&prepared);
+    extract_eics_from_prepared_queries(reader, &prepared, &mut results)?;
+    Ok(results)
+}
 
+fn extract_eics_from_prepared_queries<
+    C: CentroidLike,
+    D: DeconvolutedCentroidLike,
+    S: SpectrumLike<C, D>,
+    R: SpectrumSource<C, D, S> + ?Sized,
+>(
+    reader: &mut R,
+    prepared: &[PreparedEICQuery],
+    results: &mut [ExtractedIonChromatogram],
+) -> Result<(), EICError> {
     let original_detail_level = *reader.detail_level();
     reader.set_detail_level(DetailLevel::Lazy);
     let outcome = (|| -> Result<(), EICError> {
         for index in 0..reader.len() {
             if let Some(spectrum) = reader.get_spectrum_by_index(index) {
-                process_spectrum(&spectrum, &prepared, &mut results)?;
+                process_spectrum(&spectrum, prepared, results)?;
             }
         }
         Ok(())
     })();
     reader.set_detail_level(original_detail_level);
-    outcome?;
-    Ok(results)
+    outcome
 }
 
 fn process_spectrum<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D>>(
@@ -339,14 +351,20 @@ fn sum_array_range(mzs: &[f64], intensities: &[f32], query: &PreparedEICQuery) -
     let hi_bound = mzs.len().min(intensities.len());
     let mzs = &mzs[..hi_bound];
     let intensities = &intensities[..hi_bound];
+    let (lower_index, upper_index) = ordered_array_bounds(mzs, query);
 
-    let lower_index = mzs.partition_point(|mz| *mz < query.mz_min);
-    let upper_index = mzs.partition_point(|mz| *mz <= query.mz_max);
     intensities[lower_index..upper_index]
         .iter()
         .copied()
         .filter(|intensity| *intensity >= query.min_intensity)
         .sum()
+}
+
+fn ordered_array_bounds(mzs: &[f64], query: &PreparedEICQuery) -> (usize, usize) {
+    (
+        mzs.partition_point(|mz| *mz < query.mz_min),
+        mzs.partition_point(|mz| *mz <= query.mz_max),
+    )
 }
 
 fn normalize_bounds(a: f64, b: f64, label: &str) -> Result<(f64, f64), EICError> {
@@ -460,6 +478,14 @@ impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone
 mod tests {
     use super::*;
 
+    use mzpeaks::peak_set::PeakSetVec;
+
+    use crate::io::offset_index::OffsetIndex;
+    use crate::spectrum::bindata::{
+        ArrayType, BinaryArrayMap, BinaryCompressionType, BinaryDataArrayType, DataArray,
+    };
+    use crate::spectrum::scan_properties::{Acquisition, ScanPolarity, SignalContinuity, SpectrumDescription};
+
     #[test]
     fn query_builder_preserves_the_full_phase_one_filter_set() {
         let query = EICQuery::new(501.5, 500.5)
@@ -489,5 +515,204 @@ mod tests {
         assert_eq!(chromatogram.query, query);
         assert!(chromatogram.times.is_empty());
         assert!(chromatogram.intensities.is_empty());
+    }
+
+    #[derive(Clone)]
+    struct TrackingSpectrumSource {
+        spectra: Vec<MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>>,
+        detail_level: DetailLevel,
+        reads: usize,
+        index: OffsetIndex,
+    }
+
+    impl TrackingSpectrumSource {
+        fn new(spectra: Vec<MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>>) -> Self {
+            let mut index = OffsetIndex::new("spectrum".to_string());
+            for (i, spectrum) in spectra.iter().enumerate() {
+                index.insert(spectrum.id().to_string(), i as u64);
+            }
+
+            Self {
+                spectra,
+                detail_level: DetailLevel::Full,
+                reads: 0,
+                index,
+            }
+        }
+    }
+
+    impl Iterator for TrackingSpectrumSource {
+        type Item = MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            panic!("extract_eics_from_spectra should read by index, not by iterator")
+        }
+    }
+
+    impl SpectrumSource<CentroidPeak, DeconvolutedPeak, MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>>
+        for TrackingSpectrumSource
+    {
+        fn reset(&mut self) {
+            self.reads = 0;
+        }
+
+        fn detail_level(&self) -> &DetailLevel {
+            &self.detail_level
+        }
+
+        fn set_detail_level(&mut self, detail_level: DetailLevel) {
+            self.detail_level = detail_level;
+        }
+
+        fn get_spectrum_by_id(
+            &mut self,
+            id: &str,
+        ) -> Option<MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>> {
+            self.index.index_of(id).and_then(|index| self.get_spectrum_by_index(index))
+        }
+
+        fn get_spectrum_by_index(
+            &mut self,
+            index: usize,
+        ) -> Option<MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>> {
+            assert_eq!(
+                self.detail_level,
+                DetailLevel::Lazy,
+                "portable EIC extraction should switch the reader to lazy loading"
+            );
+            self.reads += 1;
+            self.spectra.get(index).cloned()
+        }
+
+        fn get_index(&self) -> &OffsetIndex {
+            &self.index
+        }
+
+        fn set_index(&mut self, index: OffsetIndex) {
+            self.index = index;
+        }
+    }
+
+    fn make_description(id: &str) -> SpectrumDescription {
+        let mut description = SpectrumDescription::default();
+        description.id = id.to_string();
+        description.signal_continuity = SignalContinuity::Centroid;
+        description.polarity = ScanPolarity::Unknown;
+        description.acquisition = Acquisition::default();
+        description
+    }
+
+    fn make_array_spectrum(
+        id: &str,
+        mzs: &[f64],
+        intensities: &[f32],
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        assert_eq!(mzs.len(), intensities.len());
+
+        let mut arrays = BinaryArrayMap::new();
+
+        let mut mz_array = DataArray::from_name_type_size(
+            &ArrayType::MZArray,
+            BinaryDataArrayType::Float64,
+            mzs.len() * std::mem::size_of::<f64>(),
+        );
+        mz_array.compression = BinaryCompressionType::Decoded;
+        for value in mzs {
+            mz_array.data.extend(value.to_le_bytes());
+        }
+
+        let mut intensity_array = DataArray::from_name_type_size(
+            &ArrayType::IntensityArray,
+            BinaryDataArrayType::Float32,
+            intensities.len() * std::mem::size_of::<f32>(),
+        );
+        intensity_array.compression = BinaryCompressionType::Decoded;
+        for value in intensities {
+            intensity_array.data.extend(value.to_le_bytes());
+        }
+
+        arrays.add(mz_array);
+        arrays.add(intensity_array);
+
+        MultiLayerSpectrum::new(make_description(id), Some(arrays), None, None)
+    }
+
+    fn make_peak_spectrum(
+        id: &str,
+        peaks: Vec<CentroidPeak>,
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        MultiLayerSpectrum::new(
+            make_description(id),
+            None,
+            Some(PeakSetVec::new(peaks)),
+            None,
+        )
+    }
+
+    #[test]
+    fn extract_eics_from_spectra_uses_lazy_index_reads_and_restores_detail_level() {
+        let spectrum = make_peak_spectrum(
+            "scan=1",
+            vec![CentroidPeak::new(101.0, 42.0, 0)],
+        );
+        let mut source = TrackingSpectrumSource::new(vec![spectrum]);
+        let query = EICQuery::new(100.5, 101.5);
+
+        let eics = extract_eics_from_spectra(&mut source, &[query]).expect("query should succeed");
+
+        assert_eq!(source.detail_level, DetailLevel::Full);
+        assert_eq!(source.reads, 1);
+        assert_eq!(eics[0].intensities, vec![42.0]);
+        assert_eq!(eics[0].times, vec![0.0]);
+    }
+
+    #[test]
+    fn ordered_array_windows_sum_only_the_matching_interval() {
+        let spectrum = make_array_spectrum(
+            "scan=2",
+            &[100.0, 101.0, 102.0, 103.0],
+            &[5.0, 10.0, 30.0, 20.0],
+        );
+        let mut source = TrackingSpectrumSource::new(vec![spectrum]);
+        let queries = vec![
+            EICQuery::new(101.5, 102.5),
+            EICQuery::new(100.1, 100.2),
+        ];
+
+        let eics = extract_eics_from_spectra(&mut source, &queries).expect("queries should succeed");
+
+        assert_eq!(source.detail_level, DetailLevel::Full);
+        assert_eq!(source.reads, 1);
+        assert_eq!(eics[0].times, vec![0.0]);
+        assert_eq!(eics[0].intensities, vec![30.0]);
+        assert_eq!(eics[1].times, vec![0.0]);
+        assert_eq!(eics[1].intensities, vec![0.0]);
+    }
+
+    #[test]
+    fn peak_fallback_keeps_summation_intact_without_raw_arrays() {
+        let spectrum = make_peak_spectrum(
+            "scan=3",
+            vec![
+                CentroidPeak::new(100.0, 5.0, 0),
+                CentroidPeak::new(101.0, 10.0, 1),
+                CentroidPeak::new(102.0, 30.0, 2),
+                CentroidPeak::new(103.0, 20.0, 3),
+            ],
+        );
+        let mut source = TrackingSpectrumSource::new(vec![spectrum]);
+        let queries = vec![
+            EICQuery::new(101.5, 102.5),
+            EICQuery::new(100.1, 100.2),
+        ];
+
+        let eics = extract_eics_from_spectra(&mut source, &queries).expect("queries should succeed");
+
+        assert_eq!(source.detail_level, DetailLevel::Full);
+        assert_eq!(source.reads, 1);
+        assert_eq!(eics[0].times, vec![0.0]);
+        assert_eq!(eics[0].intensities, vec![30.0]);
+        assert_eq!(eics[1].times, vec![0.0]);
+        assert_eq!(eics[1].intensities, vec![0.0]);
     }
 }

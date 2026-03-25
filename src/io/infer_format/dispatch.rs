@@ -697,7 +697,7 @@ impl<C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
 
 /// Forward the shared EIC reader trait through the format-dispatch wrapper so
 /// callers keep using the normal `reader.extract_eic(...)` / `extract_eics(...)`
-/// style.
+/// style without introducing a separate analytical entry point.
 impl<
         R: io::Read + io::Seek,
         C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
@@ -715,9 +715,11 @@ impl<
             #[cfg(feature = "mzmlb")]
             MZReaderType::MzMLb(reader) => reader.extract_eics(queries),
             #[cfg(feature = "imzml")]
+            // Ion-mobility readers keep using the shared portable fallback here.
             MZReaderType::IMzML(reader) => extract_eics_from_spectra(reader, queries),
             #[cfg(feature = "bruker_tdf")]
             MZReaderType::BrukerTDF(reader) => reader.extract_eics(queries),
+            // Unknown-format readers are backed by the same shared portable engine.
             MZReaderType::Unknown(reader, _) => extract_eics_from_spectra(reader.as_mut(), queries),
         }
     }
