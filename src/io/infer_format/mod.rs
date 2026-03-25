@@ -14,22 +14,39 @@ pub use pipeline::{MassSpectrometryReadWriteProcess, Source, Sink};
 
 #[cfg(test)]
 mod test {
-    use std::{fs, io, path};
+    use std::{collections::VecDeque, fs, io, path};
 
     #[cfg(feature = "bruker_tdf")]
     use std::time::Instant;
 
-    use mzpeaks::{CentroidPeak, DeconvolutedPeak, IntensityMeasurement, MZLocated};
+    use mzpeaks::{
+        peak_set::PeakSetVec, CentroidPeak, DeconvolutedPeak, IntensityMeasurement, MZLocated,
+    };
 
     use crate::{
         prelude::*,
-        spectrum::{ArrayType, Spectrum},
-        io::{DetailLevel, EICQuery, ExtractedIonChromatogramSource}
+        spectrum::{
+            bindata::{BinaryArrayMap, BinaryCompressionType, BinaryDataArrayType, DataArray},
+            scan_properties::{Acquisition, ScanPolarity, SignalContinuity, SpectrumDescription},
+            ArrayType, MultiLayerSpectrum, Spectrum,
+        },
+        io::{
+            DetailLevel, EICQuery, ExtractedIonChromatogramSource, MemorySpectrumSource,
+            SpectrumSource,
+        },
     };
 
     use super::*;
 
-    fn manual_extract(reader: &mut MZReader<std::fs::File>, query: &EICQuery) -> Vec<(f64, f32)> {
+    fn manual_extract<
+        C: CentroidLike,
+        D: DeconvolutedCentroidLike,
+        S: SpectrumLike<C, D>,
+        R: SpectrumSource<C, D, S>,
+    >(
+        reader: &mut R,
+        query: &EICQuery,
+    ) -> Vec<(f64, f32)> {
         let mut points = Vec::new();
         let original = *reader.detail_level();
         reader.set_detail_level(DetailLevel::Lazy);
@@ -83,6 +100,89 @@ mod test {
 
         reader.set_detail_level(original);
         points
+    }
+
+    fn make_description(id: &str, start_time: f64, ms_level: u8) -> SpectrumDescription {
+        let mut description = SpectrumDescription::default();
+        description.id = id.to_string();
+        description.ms_level = ms_level;
+        description.signal_continuity = SignalContinuity::Centroid;
+        description.polarity = ScanPolarity::Unknown;
+        description.acquisition = Acquisition::default();
+        description.acquisition.first_scan_mut().unwrap().start_time = start_time;
+        description
+    }
+
+    fn make_array_spectrum(
+        id: &str,
+        start_time: f64,
+        ms_level: u8,
+        mzs: &[f64],
+        intensities: &[f32],
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        assert_eq!(mzs.len(), intensities.len());
+
+        let mut arrays = BinaryArrayMap::new();
+
+        let mut mz_array = DataArray::from_name_type_size(
+            &ArrayType::MZArray,
+            BinaryDataArrayType::Float64,
+            mzs.len() * std::mem::size_of::<f64>(),
+        );
+        mz_array.compression = BinaryCompressionType::Decoded;
+        for value in mzs {
+            mz_array.data.extend(value.to_le_bytes());
+        }
+
+        let mut intensity_array = DataArray::from_name_type_size(
+            &ArrayType::IntensityArray,
+            BinaryDataArrayType::Float32,
+            intensities.len() * std::mem::size_of::<f32>(),
+        );
+        intensity_array.compression = BinaryCompressionType::Decoded;
+        for value in intensities {
+            intensity_array.data.extend(value.to_le_bytes());
+        }
+
+        arrays.add(mz_array);
+        arrays.add(intensity_array);
+
+        MultiLayerSpectrum::new(
+            make_description(id, start_time, ms_level),
+            Some(arrays),
+            None,
+            None,
+        )
+    }
+
+    fn make_peak_spectrum(
+        id: &str,
+        start_time: f64,
+        ms_level: u8,
+        peaks: Vec<CentroidPeak>,
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        MultiLayerSpectrum::new(
+            make_description(id, start_time, ms_level),
+            None,
+            Some(PeakSetVec::new(peaks)),
+            None,
+        )
+    }
+
+    fn synthetic_memory_reader(
+    ) -> MemorySpectrumSource<CentroidPeak, DeconvolutedPeak, MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>> {
+        MemorySpectrumSource::new(VecDeque::from(vec![
+            make_array_spectrum("scan=1", 1.0, 1, &[101.8, 102.1, 103.0], &[12.0, 18.0, 7.0]),
+            make_peak_spectrum(
+                "scan=2",
+                2.0,
+                1,
+                vec![
+                    CentroidPeak::new(100.0, 5.0, 0),
+                    CentroidPeak::new(103.0, 9.0, 1),
+                ],
+            ),
+        ]))
     }
 
     #[cfg(feature = "bruker_tdf")]
@@ -273,6 +373,22 @@ mod test {
         assert_eq!(query.mobility_min, Some(1.1));
         assert_eq!(query.mobility_max, Some(1.4));
         assert_eq!(query.min_intensity, Some(42.0_f32));
+    }
+
+    #[test]
+    fn test_extract_eic_public_reader_expected_result() {
+        let mut reader = synthetic_memory_reader();
+        let query = EICQuery::new(101.5, 102.5).with_ms_level(1);
+
+        let expected = vec![(1.0, 30.0), (2.0, 0.0)];
+        let manual = manual_extract(&mut reader, &query);
+        let eic = reader.extract_eic(&query).unwrap();
+
+        assert_eq!(manual, expected);
+        assert_eq!(
+            eic.times.iter().copied().zip(eic.intensities.iter().copied()).collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[cfg(feature = "mzml")]
