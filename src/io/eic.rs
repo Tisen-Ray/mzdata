@@ -159,6 +159,21 @@ pub enum EICError {
     TimsRust(#[from] timsrust::TimsRustError),
 }
 
+/// Units reported by EIC progress callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EICProgressUnit {
+    Spectra,
+    TdfEntries,
+}
+
+/// Incremental progress update for EIC extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EICProgress {
+    pub processed: usize,
+    pub total: usize,
+    pub unit: EICProgressUnit,
+}
+
 /// Reader-native EIC extraction for `MZReader`-style types.
 ///
 /// Callers keep the normal reader workflow and invoke `extract_eic` or
@@ -176,9 +191,29 @@ pub trait ExtractedIonChromatogramSource<
         queries: &[EICQuery],
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError>;
 
+    /// Extract a batch of chromatograms while reporting incremental progress.
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        let _ = progress;
+        self.extract_eics(queries)
+    }
+
     /// Extract a single chromatogram through the shared batch entry point.
     fn extract_eic(&mut self, query: &EICQuery) -> Result<ExtractedIonChromatogram, EICError> {
         self.extract_eics(std::slice::from_ref(query))
+            .map(|mut eics| eics.remove(0))
+    }
+
+    /// Extract a single chromatogram while reporting incremental progress.
+    fn extract_eic_with_progress(
+        &mut self,
+        query: &EICQuery,
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<ExtractedIonChromatogram, EICError> {
+        self.extract_eics_with_progress(std::slice::from_ref(query), progress)
             .map(|mut eics| eics.remove(0))
     }
 }
@@ -270,6 +305,31 @@ pub(crate) fn extract_eics_from_spectra<
     Ok(results)
 }
 
+pub(crate) fn extract_eics_from_spectra_with_progress<
+    C: CentroidLike,
+    D: DeconvolutedCentroidLike,
+    S: SpectrumLike<C, D>,
+    R: SpectrumSource<C, D, S> + ?Sized,
+>(
+    reader: &mut R,
+    queries: &[EICQuery],
+    progress: &mut dyn FnMut(EICProgress),
+) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let prepared = prepare_queries(queries)?;
+    let mut results = initialize_results(&prepared);
+    extract_eics_from_prepared_queries_with_progress(
+        reader,
+        &prepared,
+        &mut results,
+        Some(progress),
+    )?;
+    Ok(results)
+}
+
 fn extract_eics_from_prepared_queries<
     C: CentroidLike,
     D: DeconvolutedCentroidLike,
@@ -280,12 +340,34 @@ fn extract_eics_from_prepared_queries<
     prepared: &[PreparedEICQuery],
     results: &mut [ExtractedIonChromatogram],
 ) -> Result<(), EICError> {
+    extract_eics_from_prepared_queries_with_progress(reader, prepared, results, None)
+}
+
+fn extract_eics_from_prepared_queries_with_progress<
+    C: CentroidLike,
+    D: DeconvolutedCentroidLike,
+    S: SpectrumLike<C, D>,
+    R: SpectrumSource<C, D, S> + ?Sized,
+>(
+    reader: &mut R,
+    prepared: &[PreparedEICQuery],
+    results: &mut [ExtractedIonChromatogram],
+    mut progress: Option<&mut dyn FnMut(EICProgress)>,
+) -> Result<(), EICError> {
     let original_detail_level = *reader.detail_level();
     reader.set_detail_level(DetailLevel::Lazy);
+    let total = reader.len();
     let outcome = (|| -> Result<(), EICError> {
-        for index in 0..reader.len() {
+        for index in 0..total {
             if let Some(spectrum) = reader.get_spectrum_by_index(index) {
                 process_spectrum(&spectrum, prepared, results)?;
+            }
+            if let Some(progress) = progress.as_deref_mut() {
+                progress(EICProgress {
+                    processed: index + 1,
+                    total,
+                    unit: EICProgressUnit::Spectra,
+                });
             }
         }
         Ok(())
@@ -420,6 +502,14 @@ impl<
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         extract_eics_from_spectra(self, queries)
     }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        extract_eics_from_spectra_with_progress(self, queries, progress)
+    }
 }
 
 #[cfg(feature = "mzml")]
@@ -435,6 +525,14 @@ impl<
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         extract_eics_from_spectra(self, queries)
     }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        extract_eics_from_spectra_with_progress(self, queries, progress)
+    }
 }
 
 #[cfg(feature = "mzmlb")]
@@ -446,6 +544,14 @@ impl<C: CentroidLike + BuildFromArrayMap, D: DeconvolutedCentroidLike + BuildFro
         queries: &[EICQuery],
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         extract_eics_from_spectra(self, queries)
+    }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        extract_eics_from_spectra_with_progress(self, queries, progress)
     }
 }
 
@@ -461,6 +567,14 @@ impl<
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         extract_eics_from_spectra(self, queries)
     }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        extract_eics_from_spectra_with_progress(self, queries, progress)
+    }
 }
 
 impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone>
@@ -472,6 +586,14 @@ impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone
     ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         extract_eics_from_spectra(self, queries)
     }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        extract_eics_from_spectra_with_progress(self, queries, progress)
+    }
 }
 
 #[cfg(test)]
@@ -481,10 +603,13 @@ mod tests {
     use mzpeaks::peak_set::PeakSetVec;
 
     use crate::io::offset_index::OffsetIndex;
+    use crate::params::{ControlledVocabulary, Param};
     use crate::spectrum::bindata::{
         ArrayType, BinaryArrayMap, BinaryCompressionType, BinaryDataArrayType, DataArray,
     };
-    use crate::spectrum::scan_properties::{Acquisition, ScanPolarity, SignalContinuity, SpectrumDescription};
+    use crate::spectrum::scan_properties::{
+        Acquisition, ScanPolarity, SignalContinuity, SpectrumDescription,
+    };
 
     #[test]
     fn query_builder_preserves_the_full_phase_one_filter_set() {
@@ -549,8 +674,12 @@ mod tests {
         }
     }
 
-    impl SpectrumSource<CentroidPeak, DeconvolutedPeak, MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>>
-        for TrackingSpectrumSource
+    impl
+        SpectrumSource<
+            CentroidPeak,
+            DeconvolutedPeak,
+            MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>,
+        > for TrackingSpectrumSource
     {
         fn reset(&mut self) {
             self.reads = 0;
@@ -568,7 +697,9 @@ mod tests {
             &mut self,
             id: &str,
         ) -> Option<MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>> {
-            self.index.index_of(id).and_then(|index| self.get_spectrum_by_index(index))
+            self.index
+                .index_of(id)
+                .and_then(|index| self.get_spectrum_by_index(index))
         }
 
         fn get_spectrum_by_index(
@@ -656,6 +787,25 @@ mod tests {
         spectrum
     }
 
+    fn make_timed_mobility_array_spectrum(
+        id: &str,
+        start_time: f64,
+        ms_level: u8,
+        mobility: f64,
+        mzs: &[f64],
+        intensities: &[f32],
+    ) -> MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak> {
+        let mut spectrum = make_timed_array_spectrum(id, start_time, ms_level, mzs, intensities);
+        let scan = spectrum.description.acquisition.first_scan_mut().unwrap();
+        scan.params = Some(Box::new(vec![Param::builder()
+            .name("inverse reduced ion mobility")
+            .controlled_vocabulary(ControlledVocabulary::MS)
+            .accession(1002815)
+            .value(mobility)
+            .build()]));
+        spectrum
+    }
+
     fn make_peak_spectrum(
         id: &str,
         peaks: Vec<CentroidPeak>,
@@ -681,10 +831,7 @@ mod tests {
 
     #[test]
     fn extract_eics_from_spectra_uses_lazy_index_reads_and_restores_detail_level() {
-        let spectrum = make_peak_spectrum(
-            "scan=1",
-            vec![CentroidPeak::new(101.0, 42.0, 0)],
-        );
+        let spectrum = make_peak_spectrum("scan=1", vec![CentroidPeak::new(101.0, 42.0, 0)]);
         let mut source = TrackingSpectrumSource::new(vec![spectrum]);
         let query = EICQuery::new(100.5, 101.5);
 
@@ -704,12 +851,10 @@ mod tests {
             &[5.0, 10.0, 30.0, 20.0],
         );
         let mut source = TrackingSpectrumSource::new(vec![spectrum]);
-        let queries = vec![
-            EICQuery::new(101.5, 102.5),
-            EICQuery::new(100.1, 100.2),
-        ];
+        let queries = vec![EICQuery::new(101.5, 102.5), EICQuery::new(100.1, 100.2)];
 
-        let eics = extract_eics_from_spectra(&mut source, &queries).expect("queries should succeed");
+        let eics =
+            extract_eics_from_spectra(&mut source, &queries).expect("queries should succeed");
 
         assert_eq!(source.detail_level, DetailLevel::Full);
         assert_eq!(source.reads, 1);
@@ -731,12 +876,10 @@ mod tests {
             ],
         );
         let mut source = TrackingSpectrumSource::new(vec![spectrum]);
-        let queries = vec![
-            EICQuery::new(101.5, 102.5),
-            EICQuery::new(100.1, 100.2),
-        ];
+        let queries = vec![EICQuery::new(101.5, 102.5), EICQuery::new(100.1, 100.2)];
 
-        let eics = extract_eics_from_spectra(&mut source, &queries).expect("queries should succeed");
+        let eics =
+            extract_eics_from_spectra(&mut source, &queries).expect("queries should succeed");
 
         assert_eq!(source.detail_level, DetailLevel::Full);
         assert_eq!(source.reads, 1);
@@ -749,13 +892,7 @@ mod tests {
     #[test]
     fn portable_eic_regression_keeps_zero_points_for_matching_spectra() {
         let spectra = vec![
-            make_timed_array_spectrum(
-                "scan=4",
-                1.0,
-                1,
-                &[101.8, 102.1, 103.0],
-                &[12.0, 18.0, 7.0],
-            ),
+            make_timed_array_spectrum("scan=4", 1.0, 1, &[101.8, 102.1, 103.0], &[12.0, 18.0, 7.0]),
             make_timed_peak_spectrum(
                 "scan=5",
                 2.0,
@@ -765,13 +902,7 @@ mod tests {
                     CentroidPeak::new(103.0, 9.0, 1),
                 ],
             ),
-            make_timed_array_spectrum(
-                "scan=6",
-                3.0,
-                2,
-                &[101.9, 102.0],
-                &[50.0, 60.0],
-            ),
+            make_timed_array_spectrum("scan=6", 3.0, 2, &[101.9, 102.0], &[50.0, 60.0]),
         ];
         let mut source = TrackingSpectrumSource::new(spectra);
         let query = EICQuery::new(101.5, 102.5).with_ms_level(1);
@@ -783,5 +914,24 @@ mod tests {
         assert_eq!(source.reads, 3);
         assert_eq!(eic.times, vec![1.0, 2.0]);
         assert_eq!(eic.intensities, vec![30.0, 0.0]);
+    }
+
+    #[test]
+    fn portable_fallback_honors_one_sided_mobility_filters() {
+        let spectra = vec![
+            make_timed_mobility_array_spectrum("scan=7", 1.0, 1, 1.05, &[100.0], &[5.0]),
+            make_timed_mobility_array_spectrum("scan=8", 2.0, 1, 1.35, &[100.0], &[7.0]),
+        ];
+        let mut source = TrackingSpectrumSource::new(spectra);
+        let mut query = EICQuery::new(99.5, 100.5);
+        query.mobility_min = Some(1.2);
+
+        let eics = extract_eics_from_spectra(&mut source, &[query]).expect("query should succeed");
+        let eic = &eics[0];
+
+        assert_eq!(source.detail_level, DetailLevel::Full);
+        assert_eq!(source.reads, 2);
+        assert_eq!(eic.times, vec![2.0]);
+        assert_eq!(eic.intensities, vec![7.0]);
     }
 }

@@ -34,8 +34,11 @@ use crate::io::thermo::ThermoRawReaderType;
 use crate::io::tdf::{TDFSpectrumReaderType, TDFFrameReaderType};
 
 use crate::io::traits::{ChromatogramSource, StreamingSpectrumIterator};
-use crate::io::{EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource};
-use super::super::eic::extract_eics_from_spectra;
+use crate::io::{
+    EICError, EICProgress, EICQuery, ExtractedIonChromatogram,
+    ExtractedIonChromatogramSource,
+};
+use super::super::eic::{extract_eics_from_spectra, extract_eics_from_spectra_with_progress};
 use crate::io::{DetailLevel, SpectrumSourceWithMetadata};
 
 use super::{infer_format, infer_from_stream, MassSpectrometryFormat};
@@ -718,9 +721,37 @@ impl<
             // Ion-mobility readers keep using the shared portable fallback here.
             MZReaderType::IMzML(reader) => extract_eics_from_spectra(reader, queries),
             #[cfg(feature = "bruker_tdf")]
+            // Bruker TDF keeps the optimization decision backend-local and may fall back
+            // to the shared portable engine when the query shape needs broader semantics.
             MZReaderType::BrukerTDF(reader) => reader.extract_eics(queries),
             // Unknown-format readers are backed by the same shared portable engine.
             MZReaderType::Unknown(reader, _) => extract_eics_from_spectra(reader.as_mut(), queries),
+        }
+    }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        match self {
+            #[cfg(feature = "mzml")]
+            MZReaderType::MzML(reader) => reader.extract_eics_with_progress(queries, progress),
+            #[cfg(feature = "mgf")]
+            MZReaderType::MGF(reader) => reader.extract_eics_with_progress(queries, progress),
+            #[cfg(feature = "thermo")]
+            MZReaderType::ThermoRaw(reader) => reader.extract_eics_with_progress(queries, progress),
+            #[cfg(feature = "mzmlb")]
+            MZReaderType::MzMLb(reader) => reader.extract_eics_with_progress(queries, progress),
+            #[cfg(feature = "imzml")]
+            MZReaderType::IMzML(reader) => {
+                extract_eics_from_spectra_with_progress(reader, queries, progress)
+            }
+            #[cfg(feature = "bruker_tdf")]
+            MZReaderType::BrukerTDF(reader) => reader.extract_eics_with_progress(queries, progress),
+            MZReaderType::Unknown(reader, _) => {
+                extract_eics_from_spectra_with_progress(reader.as_mut(), queries, progress)
+            }
         }
     }
 }

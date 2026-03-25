@@ -9,6 +9,11 @@ search, additive backend optimizations behind that surface, and lightweight
 documentation and validation. TIC, DT, and broader analytical slicing remain
 explicitly deferred until this EIC foundation is stable.
 
+## Roadmap Evolution
+
+- 2026-03-25: Phase 3 completed with backend-local TDF acceleration, portable
+  fallback validation, and explicit spectrum/frame compatibility checks.
+
 ## Phases
 
 - [x] **Phase 1: Public EIC Surface** - establish the shared public query and
@@ -16,7 +21,7 @@ explicitly deferred until this EIC foundation is stable.
 - [x] **Phase 2: Portable Spectrum EIC Engine** - implement the common lazy,
   binary-search extraction path and a simple regression anchor. (completed
   2026-03-25)
-- [ ] **Phase 3: Additive Backend Integration** - preserve compatibility while
+- [x] **Phase 3: Additive Backend Integration** - preserve compatibility while
   hiding backend-specific accelerations behind the same API.
 - [ ] **Phase 4: Docs and Feasibility Validation** - document the chosen model
   and prove it on a small real RAW dataset.
@@ -65,7 +70,7 @@ while preserving existing spectrum/frame behavior and future extension seams.
    EIC integration.
 3. The resulting trait and file layout leaves a clear additive path for future
    TIC/DT work without redesigning the public model.
-**Plans:** TBD
+**Plans:** 2/2 plans complete
 
 ### Phase 4: Docs and Feasibility Validation
 **Goal:** Document the chosen EIC model, state the milestone boundary clearly,
@@ -92,5 +97,5 @@ dataset.
 |-------|----------------|--------|-----------|
 | 1. Public EIC Surface | 2/2 | Complete   | 2026-03-25 |
 | 2. Portable Spectrum EIC Engine | 2/2 | Complete   | 2026-03-25 |
-| 3. Additive Backend Integration | 0/TBD | Not started | - |
+| 3. Additive Backend Integration | 2/2 | Complete   | 2026-03-25 |
 | 4. Docs and Feasibility Validation | 0/TBD | Not started | - |

@@ -102,6 +102,22 @@ mod test {
         points
     }
 
+    fn assert_points_match(actual: &[(f64, f32)], expected: &[(f64, f32)]) {
+        assert_eq!(actual.len(), expected.len());
+        for ((time, intensity), (expected_time, expected_intensity)) in
+            actual.iter().copied().zip(expected.iter().copied())
+        {
+            assert!(
+                (time - expected_time).abs() < 1e-9,
+                "time mismatch: got {time}, expected {expected_time}"
+            );
+            assert!(
+                (intensity - expected_intensity).abs() < 1e-3,
+                "intensity mismatch at time {time}: got {intensity}, expected {expected_intensity}"
+            );
+        }
+    }
+
     fn make_description(id: &str, start_time: f64, ms_level: u8) -> SpectrumDescription {
         let mut description = SpectrumDescription::default();
         description.id = id.to_string();
@@ -479,27 +495,89 @@ mod test {
 
     #[cfg(feature = "bruker_tdf")]
     #[test]
-    fn test_extract_eic_dispatch_tdf() -> io::Result<()> {
+    fn test_extract_eic_dispatch_tdf_fast_path_matches_manual_reference() -> io::Result<()> {
         let mut reader = MZReader::open_path("test/data/diaPASEF.d")?;
         let query = EICQuery::new(500.0, 501.0).with_ms_level(1);
         let manual = manual_extract(&mut reader, &query);
 
+        let eics = reader.extract_eics(std::slice::from_ref(&query)).unwrap();
+        assert_eq!(eics.len(), 1);
+        assert_points_match(
+            &eics[0]
+                .times
+                .iter()
+                .copied()
+                .zip(eics[0].intensities.iter().copied())
+                .collect::<Vec<_>>(),
+            &manual,
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "bruker_tdf")]
+    #[test]
+    fn test_extract_eic_dispatch_tdf_portable_fallback_matches_manual_reference() -> io::Result<()> {
+        let mut reader = MZReader::open_path("test/data/diaPASEF.d")?;
+        let mut query = EICQuery::new(500.0, 501.0).with_ms_level(1);
+        query.mobility_min = Some(1.1);
+        let mut portable_reader = crate::io::tdf::TDFSpectrumReader::new("test/data/diaPASEF.d")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let portable = crate::io::eic::extract_eics_from_spectra(
+            &mut portable_reader,
+            std::slice::from_ref(&query),
+        )
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
         let eic = reader.extract_eic(&query).unwrap();
-        assert_eq!(eic.times.len(), eic.intensities.len());
-        assert_eq!(eic.times.len(), manual.len());
-        for ((time, intensity), (expected_time, expected_intensity)) in eic
+        let actual: Vec<_> = eic
             .times
             .iter()
             .copied()
             .zip(eic.intensities.iter().copied())
-            .zip(manual.into_iter())
-        {
-            assert!((time - expected_time).abs() < 1e-9);
-            assert!(
-                (intensity - expected_intensity).abs() < 1e-3,
-                "tdf mismatch at time {time}: got {intensity}, expected {expected_intensity}"
-            );
-        }
+            .collect();
+        assert_eq!(portable.len(), 1);
+        assert_points_match(&actual, &portable[0].times.iter().copied().zip(portable[0].intensities.iter().copied()).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    #[cfg(feature = "bruker_tdf")]
+    #[test]
+    fn test_tdf_spectrum_and_frame_compatibility_after_eic_integration() -> io::Result<()> {
+        let mut reader = MZReader::open_path("test/data/diaPASEF.d")?;
+        let original_detail_level = *reader.detail_level();
+        let original_len = reader.len();
+        let query = EICQuery::new(500.0, 501.0).with_ms_level(1);
+
+        let eic = reader.extract_eic(&query).unwrap();
+        assert!(!eic.times.is_empty());
+        assert_eq!(*reader.detail_level(), original_detail_level);
+        assert_eq!(reader.len(), original_len);
+
+        let first_spectrum = reader.get_spectrum_by_index(0).unwrap();
+        assert_eq!(first_spectrum.index(), 0);
+        assert_eq!(reader.get_spectrum_by_id(first_spectrum.id()).unwrap().index(), 0);
+        assert_eq!(
+            reader
+                .get_spectrum_by_time(first_spectrum.start_time())
+                .unwrap()
+                .index(),
+            0
+        );
+        reader.reset();
+        assert_eq!(reader.iter().take(2).count(), 2);
+
+        let mut frame_reader = crate::io::tdf::TDFFrameReaderType::<
+            mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::IonMobility>,
+            mzpeaks::feature::ChargedFeature<mzpeaks::Mass, mzpeaks::IonMobility>,
+        >::new("test/data/diaPASEF.d")
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let first_frame = frame_reader.get_frame_by_index(0).unwrap();
+        assert!(first_frame.features.is_none());
+        assert_eq!(first_frame.ms_level(), 1);
+        let second_frame = frame_reader.get_frame_by_index(1).unwrap();
+        assert!(second_frame.features.is_none());
+        assert_eq!(second_frame.ms_level(), 2);
+
         Ok(())
     }
 

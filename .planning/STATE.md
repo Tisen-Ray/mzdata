@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 3
-current_phase_name: additive backend integration
+current_phase: 4
+current_phase_name: docs and feasibility validation
 current_plan: Not started
 status: planning
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-25T08:43:42.470Z"
+stopped_at: Phase 03 complete, ready to plan Phase 04
+last_updated: "2026-03-25T10:21:36.690Z"
 last_activity: 2026-03-25
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
   percent: 100
 ---
 
@@ -26,24 +26,24 @@ See: `.planning/PROJECT.md` (updated 2026-03-25)
 **Core value:** A caller can extract targeted analytical traces through one
 clean API without loading the whole file or writing format-specific extraction
 code.
-**Current focus:** Phase 3 - Additive Backend Integration
+**Current focus:** Phase 4 - Docs and Feasibility Validation
 
 ## Current Position
 
-**Phase:** 3 of 4 (Additive Backend Integration)
+**Phase:** 4 of 4 (Docs and Feasibility Validation)
 **Plan:** Not started
 **Status:** Ready to plan
 **Last activity:** 2026-03-25
 **Progress:** [██████████] 100%
 
-**Current Phase:** 3
-**Current Phase Name:** additive backend integration
+**Current Phase:** 4
+**Current Phase Name:** docs and feasibility validation
 **Total Phases:** 4
 **Current Plan:** Not started
-**Total Plans in Phase:** TBD
+**Total Plans in Phase:** 2
 **Last Activity:** 2026-03-25
-**Last Activity Description:** Phase 02 completed and the project transitioned
-to Phase 3 for additive backend integration work.
+**Last Activity Description:** Phase 03 completed and the project transitioned
+to Phase 4 for docs and feasibility validation work.
 
 ## Accumulated Context
 
@@ -68,6 +68,7 @@ Decisions are logged in `.planning/PROJECT.md`. Current milestone assumptions:
 - [Phase 2]: Kept the portable fallback as a refinement of `extract_eics_from_spectra` with local lazy execution and ordered-array bounds rather than introducing a new abstraction layer.
 - [Phase 02-portable-spectrum-eic-engine]: Kept the regression anchor synthetic and deterministic instead of adding a fixture-heavy harness. — This keeps the failure mode focused on chromatogram-shape drift and avoids brittle dataset dependencies.
 - [Phase 02-portable-spectrum-eic-engine]: Reused the public reader-facing test neighborhood with a generic manual_extract helper rather than introducing a new abstraction layer. — This keeps the expected-result check close to the production extract_eic API while avoiding duplicated test scaffolding.
+- [Phase 3]: Kept Bruker TDF EIC optimization backend-local and routed partial mobility windows through the shared portable fallback so the public API stays fixed at `extract_eic` / `extract_eics`.
 
 ### Pending Todos
 
@@ -79,8 +80,9 @@ None yet.
   or unrelated cleanup.
 - Real-data validation depends on access to
   `C:\Users\ray\Desktop\20241005-TDP-CYTO-C-1.raw`.
-- Bruker TDF fast-path correctness and non-default feature coverage still need
-  lightweight regression anchors before claiming cross-format confidence.
+- Phase 4 documentation and feasibility validation still depend on access to
+  the local RAW dataset and keeping the newly-added backend coverage aligned
+  with the public EIC story.
 
 ### Roadmap Evolution
 
@@ -94,5 +96,5 @@ None yet.
 ## Session
 
 **Last Date:** 2026-03-25T08:43:42.470Z
-**Stopped At:** Phase 02 complete, ready to plan Phase 03
+**Stopped At:** Phase 03 complete, ready to plan Phase 04
 **Resume File:** .planning/ROADMAP.md

@@ -18,7 +18,7 @@ code.
 - [x] **EIC-04**: When ordered `m/z` arrays are available, the shared EIC path
   uses binary search to restrict work to the matching interval instead of
   linearly scanning the full array.
-- [ ] **EIC-05**: Format-specific optimizations, such as Bruker TDF fast paths,
+- [x] **EIC-05**: Format-specific optimizations, such as Bruker TDF fast paths,
   remain hidden behind the same public EIC interface.
 
 ### Architecture
@@ -26,9 +26,9 @@ code.
 - [x] **ARCH-01**: The new analytical extraction code fits naturally into the
   existing trait and module structure without making the reader hierarchy harder
   to understand.
-- [ ] **ARCH-02**: Existing spectrum and frame access APIs continue to behave as
+- [x] **ARCH-02**: Existing spectrum and frame access APIs continue to behave as
   before after the EIC interface is introduced.
-- [ ] **ARCH-03**: The resulting file layout and trait structure are clear
+- [x] **ARCH-03**: The resulting file layout and trait structure are clear
   enough that future TIC/DT work can extend them without a redesign.
 
 ### Documentation
@@ -86,9 +86,9 @@ code.
 | EIC-03 | Phase 2 - Portable Spectrum EIC Engine | Complete |
 | EIC-04 | Phase 2 - Portable Spectrum EIC Engine | Complete |
 | TEST-03 | Phase 2 - Portable Spectrum EIC Engine | Complete |
-| EIC-05 | Phase 3 - Additive Backend Integration | Pending |
-| ARCH-02 | Phase 3 - Additive Backend Integration | Pending |
-| ARCH-03 | Phase 3 - Additive Backend Integration | Pending |
+| EIC-05 | Phase 3 - Additive Backend Integration | Complete |
+| ARCH-02 | Phase 3 - Additive Backend Integration | Complete |
+| ARCH-03 | Phase 3 - Additive Backend Integration | Complete |
 | DOCS-01 | Phase 4 - Docs and Feasibility Validation | Pending |
 | DOCS-02 | Phase 4 - Docs and Feasibility Validation | Pending |
 | DOCS-03 | Phase 4 - Docs and Feasibility Validation | Pending |
@@ -102,4 +102,4 @@ code.
 
 ---
 *Requirements defined: 2026-03-25*
-*Last updated: 2026-03-25 after roadmap traceability mapping*
+*Last updated: 2026-03-25 after phase 03 plan 02 compatibility coverage*

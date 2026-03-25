@@ -130,7 +130,8 @@ pub mod utils;
 
 /// Crate-root access to the reader-native EIC query, result, and trait surface.
 pub use crate::io::{
-    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
+    EICError, EICProgress, EICProgressUnit, EICQuery, ExtractedIonChromatogram,
+    ExtractedIonChromatogramSource,
 };
 
 pub use crate::io::{MZReader, MZReaderBuilder};

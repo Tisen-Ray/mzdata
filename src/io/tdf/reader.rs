@@ -11,8 +11,8 @@ use crate::io::checksum_file;
 use crate::{
     curie,
     io::{
-        DetailLevel, EICError, EICQuery, ExtractedIonChromatogram,
-        ExtractedIonChromatogramSource, IntoIonMobilityFrameSource,
+        DetailLevel, EICError, EICProgress, EICProgressUnit, EICQuery,
+        ExtractedIonChromatogram, ExtractedIonChromatogramSource, IntoIonMobilityFrameSource,
         IonMobilityFrameAccessError, OffsetIndex,
     },
     meta::{
@@ -55,7 +55,10 @@ use super::{
         SQLFrame, SQLPasefFrameMsMs, SQLPrecursor, TDFMSnFacet,
     },
 };
-use crate::io::eic::{initialize_results, prepare_queries, PreparedEICQuery};
+use crate::io::eic::{
+    extract_eics_from_spectra, extract_eics_from_spectra_with_progress, initialize_results,
+    prepare_queries, PreparedEICQuery,
+};
 
 const PEAK_MERGE_TOLERANCE: Tolerance = Tolerance::PPM(10.0);
 
@@ -72,6 +75,19 @@ struct PreparedTDFEICQuery {
     tof_max: u32,
     scan_start: Option<usize>,
     scan_end: Option<usize>,
+}
+
+fn query_requires_portable_fallback(query: &EICQuery) -> bool {
+    matches!(
+        (query.mobility_min, query.mobility_max),
+        (Some(_), None) | (None, Some(_))
+    )
+}
+
+fn can_use_native_eic_fast_path(queries: &[EICQuery]) -> bool {
+    queries
+        .iter()
+        .all(|query| !query_requires_portable_fallback(query))
 }
 
 #[derive(Debug, Clone)]
@@ -592,12 +608,18 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
 
             let arrays = if !matches!(self.detail_level, DetailLevel::MetadataOnly) {
                 if let Some(pasef) = entry.pasef_msms() {
-                    log::trace!("Extracting {index} as PasefFrameMsMs with range {:?}", pasef.scan_start..pasef.scan_end);
+                    log::trace!(
+                        "Extracting {index} as PasefFrameMsMs with range {:?}",
+                        pasef.scan_start..pasef.scan_end
+                    );
                     let arrays = FrameToArraysMapper::new(&frame, &self.metadata)
                         .process_3d_slice(pasef.scan_start..pasef.scan_end);
                     Some(arrays)
                 } else if let Some(dia_pasef) = entry.dia_window() {
-                    log::trace!("Extracting {index} as DIAFrameMsMsWindow with range {:?}", dia_pasef.scan_start..dia_pasef.scan_end);
+                    log::trace!(
+                        "Extracting {index} as DIAFrameMsMsWindow with range {:?}",
+                        dia_pasef.scan_start..dia_pasef.scan_end
+                    );
                     let arrays = FrameToArraysMapper::new(&frame, &self.metadata)
                         .process_3d_slice(dia_pasef.scan_start..dia_pasef.scan_end);
                     Some(arrays)
@@ -630,7 +652,10 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         Ok(handle)
     }
 
-    fn prepare_eic_queries(&self, queries: &[EICQuery]) -> Result<Vec<PreparedTDFEICQuery>, EICError> {
+    fn prepare_eic_queries(
+        &self,
+        queries: &[EICQuery],
+    ) -> Result<Vec<PreparedTDFEICQuery>, EICError> {
         let prepared = prepare_queries(queries)?;
         prepared
             .into_iter()
@@ -645,18 +670,17 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                 let tof_min = tof_min.max(0.0) as u32;
                 let tof_max = tof_max.max(tof_min as f64) as u32;
 
-                let (scan_start, scan_end) =
-                    if let (Some(mobility_min), Some(mobility_max)) =
-                        (query.mobility_min, query.mobility_max)
-                    {
-                        let scan_lo = self.metadata.im_converter.invert(mobility_min);
-                        let scan_hi = self.metadata.im_converter.invert(mobility_max);
-                        let scan_start = scan_lo.min(scan_hi).floor().max(0.0) as usize;
-                        let scan_end = scan_lo.max(scan_hi).ceil().max(0.0) as usize + 1;
-                        (Some(scan_start), Some(scan_end))
-                    } else {
-                        (None, None)
-                    };
+                let (scan_start, scan_end) = if let (Some(mobility_min), Some(mobility_max)) =
+                    (query.mobility_min, query.mobility_max)
+                {
+                    let scan_lo = self.metadata.im_converter.invert(mobility_min);
+                    let scan_hi = self.metadata.im_converter.invert(mobility_max);
+                    let scan_start = scan_lo.min(scan_hi).floor().max(0.0) as usize;
+                    let scan_end = scan_lo.max(scan_hi).ceil().max(0.0) as usize + 1;
+                    (Some(scan_start), Some(scan_end))
+                } else {
+                    (None, None)
+                };
 
                 Ok(PreparedTDFEICQuery {
                     base: query,
@@ -669,7 +693,18 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
             .collect()
     }
 
-    fn extract_eics_fast(&self, queries: &[EICQuery]) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+    fn extract_eics_fast(
+        &self,
+        queries: &[EICQuery],
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        self.extract_eics_fast_with_progress(queries, None)
+    }
+
+    fn extract_eics_fast_with_progress(
+        &self,
+        queries: &[EICQuery],
+        mut progress: Option<&mut dyn FnMut(EICProgress)>,
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         if queries.is_empty() {
             return Ok(Vec::new());
         }
@@ -679,7 +714,8 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         let mut results = initialize_results(&base_queries);
 
         let mut frame_cache: Option<(usize, timsrust::Frame)> = None;
-        for entry in &self.entry_index {
+        let total = self.entry_index.len();
+        for (entry_index, entry) in self.entry_index.iter().enumerate() {
             let time = entry.frame.time / 60.0;
             let candidate_queries: Vec<usize> = prepared
                 .iter()
@@ -712,7 +748,10 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                 frame_cache = Some((entry.frame.id, frame));
             }
 
-            let frame = &frame_cache.as_ref().expect("frame cache should be populated").1;
+            let frame = &frame_cache
+                .as_ref()
+                .expect("frame cache should be populated")
+                .1;
             let total_scans = frame.scan_offsets.len().saturating_sub(1);
             let (entry_scan_start, entry_scan_end) = entry.scan_range();
 
@@ -736,6 +775,14 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                 };
                 results[query_index].times.push(time);
                 results[query_index].intensities.push(intensity);
+            }
+
+            if let Some(progress) = progress.as_deref_mut() {
+                progress(EICProgress {
+                    processed: entry_index + 1,
+                    total,
+                    unit: EICProgressUnit::TdfEntries,
+                });
             }
         }
 
@@ -1319,8 +1366,28 @@ impl<
         DP: DeconvolutedCentroidLike,
     > ExtractedIonChromatogramSource<CP, DP> for TDFSpectrumReaderType<C, D, CP, DP>
 {
-    fn extract_eics(&mut self, queries: &[EICQuery]) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
-        self.frame_reader.extract_eics_fast(queries)
+    fn extract_eics(
+        &mut self,
+        queries: &[EICQuery],
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        if can_use_native_eic_fast_path(queries) {
+            self.frame_reader.extract_eics_fast(queries)
+        } else {
+            extract_eics_from_spectra(self, queries)
+        }
+    }
+
+    fn extract_eics_with_progress(
+        &mut self,
+        queries: &[EICQuery],
+        progress: &mut dyn FnMut(EICProgress),
+    ) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
+        if can_use_native_eic_fast_path(queries) {
+            self.frame_reader
+                .extract_eics_fast_with_progress(queries, Some(progress))
+        } else {
+            extract_eics_from_spectra_with_progress(self, queries, progress)
+        }
     }
 }
 
@@ -1456,7 +1523,10 @@ impl<
     pub fn consolidate_peaks(
         &self,
         spectrum: &mut MultiLayerSpectrum<CP, DP>,
-    ) -> Result<(), ArrayRetrievalError> where CP: From<CentroidPeak> {
+    ) -> Result<(), ArrayRetrievalError>
+    where
+        CP: From<CentroidPeak>,
+    {
         if let Some(arrays) = spectrum.arrays.as_ref() {
             let arrays = BinaryArrayMap3D::stack(arrays)?;
             spectrum.peaks = Some(consolidate_peaks(
@@ -1795,6 +1865,83 @@ pub fn is_tdf<P: AsRef<Path>>(path: P) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn native_fast_path_requires_complete_mobility_windows() {
+        let query = EICQuery::new(100.0, 101.0);
+        assert!(!query_requires_portable_fallback(&query));
+        assert!(can_use_native_eic_fast_path(&[query]));
+
+        let mut query = EICQuery::new(100.0, 101.0);
+        query.mobility_min = Some(1.1);
+        assert!(query_requires_portable_fallback(&query));
+        assert!(!can_use_native_eic_fast_path(&[query]));
+
+        let mut query = EICQuery::new(100.0, 101.0);
+        query.mobility_max = Some(1.4);
+        assert!(query_requires_portable_fallback(&query));
+        assert!(!can_use_native_eic_fast_path(&[query]));
+
+        let query = EICQuery::new(100.0, 101.0).with_mobility_range(1.1, 1.4);
+        assert!(!query_requires_portable_fallback(&query));
+        assert!(can_use_native_eic_fast_path(&[query]));
+    }
+
+    fn assert_points_match(actual: &ExtractedIonChromatogram, expected: &ExtractedIonChromatogram) {
+        assert_eq!(actual.times.len(), expected.times.len());
+        assert_eq!(actual.intensities.len(), expected.intensities.len());
+        for ((time, intensity), (expected_time, expected_intensity)) in actual
+            .times
+            .iter()
+            .copied()
+            .zip(actual.intensities.iter().copied())
+            .zip(
+                expected
+                    .times
+                    .iter()
+                    .copied()
+                    .zip(expected.intensities.iter().copied()),
+            )
+        {
+            assert!(
+                (time - expected_time).abs() < 1e-9,
+                "time mismatch: got {time}, expected {expected_time}"
+            );
+            assert!(
+                (intensity - expected_intensity).abs() < 1e-3,
+                "intensity mismatch at time {time}: got {intensity}, expected {expected_intensity}"
+            );
+        }
+    }
+
+    #[cfg(feature = "bruker_tdf")]
+    #[test]
+    fn native_fast_path_matches_portable_reference_for_supported_query_shape() -> io::Result<()> {
+        let query = EICQuery::new(500.0, 501.0).with_ms_level(1);
+        assert!(!query_requires_portable_fallback(&query));
+        assert!(can_use_native_eic_fast_path(std::slice::from_ref(&query)));
+
+        let fast_reader = TDFFrameReaderType::<
+            mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::IonMobility>,
+            mzpeaks::feature::ChargedFeature<mzpeaks::Mass, mzpeaks::IonMobility>,
+        >::new("test/data/diaPASEF.d")
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let fast = fast_reader
+            .extract_eics_fast(std::slice::from_ref(&query))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        assert_eq!(fast_reader.detail_level, DetailLevel::Full);
+
+        let mut portable_reader = TDFSpectrumReader::new("test/data/diaPASEF.d")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let portable = extract_eics_from_spectra(&mut portable_reader, std::slice::from_ref(&query))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        assert_eq!(*portable_reader.detail_level(), DetailLevel::Full);
+
+        assert_eq!(fast.len(), 1);
+        assert_eq!(portable.len(), 1);
+        assert_points_match(&fast[0], &portable[0]);
+        Ok(())
+    }
 
     #[test]
     fn test_tdf_spectrum() -> io::Result<()> {

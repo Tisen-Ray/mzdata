@@ -31,7 +31,8 @@ pub use crate::io::infer_format::{
 /// Extracted ion chromatograms are computed views returned through reader APIs,
 /// not file-native chromatogram objects.
 pub use crate::io::eic::{
-    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
+    EICError, EICProgress, EICProgressUnit, EICQuery, ExtractedIonChromatogram,
+    ExtractedIonChromatogramSource,
 };
 
 #[cfg(feature = "mgf")]

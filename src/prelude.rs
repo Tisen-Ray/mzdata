@@ -9,7 +9,8 @@ pub use crate::io::traits::{
 };
 /// Prelude exposure for the shared reader-native EIC query, result, and trait surface.
 pub use crate::io::{
-    EICError, EICQuery, ExtractedIonChromatogram, ExtractedIonChromatogramSource,
+    EICError, EICProgress, EICProgressUnit, EICQuery, ExtractedIonChromatogram,
+    ExtractedIonChromatogramSource,
 };
 
 #[cfg(feature = "async_partial")]
