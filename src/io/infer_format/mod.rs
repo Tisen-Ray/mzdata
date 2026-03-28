@@ -30,14 +30,14 @@ mod test {
             scan_properties::{Acquisition, ScanPolarity, SignalContinuity, SpectrumDescription},
             ArrayType, MultiLayerSpectrum, Spectrum,
         },
-        io::{
-            DetailLevel, EICQuery, ExtractedIonChromatogramSource, MemorySpectrumSource,
-            SpectrumSource,
-        },
+        io::{DetailLevel, MemorySpectrumSource, SpectrumSource},
     };
+    #[cfg(feature = "eic")]
+    use crate::io::{EICQuery, ExtractedIonChromatogramSource};
 
     use super::*;
 
+    #[cfg(feature = "eic")]
     fn manual_extract<
         C: CentroidLike,
         D: DeconvolutedCentroidLike,
@@ -102,6 +102,7 @@ mod test {
         points
     }
 
+    #[cfg(feature = "eic")]
     fn assert_points_match(actual: &[(f64, f32)], expected: &[(f64, f32)]) {
         assert_eq!(actual.len(), expected.len());
         for ((time, intensity), (expected_time, expected_intensity)) in
@@ -201,7 +202,7 @@ mod test {
         ]))
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     fn peak_queries_from_first_ms1(
         reader: &mut MZReader<std::fs::File>,
         count: usize,
@@ -373,6 +374,7 @@ mod test {
         Ok(())
     }
 
+    #[cfg(feature = "eic")]
     #[test]
     fn test_eic_query_builder_carries_the_full_phase_one_filter_set() {
         let query = EICQuery::new(650.0, 651.0)
@@ -391,6 +393,7 @@ mod test {
         assert_eq!(query.min_intensity, Some(42.0_f32));
     }
 
+    #[cfg(feature = "eic")]
     #[test]
     fn test_extract_eic_public_reader_expected_result() {
         let mut reader = synthetic_memory_reader();
@@ -441,7 +444,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "mzml")]
+    #[cfg(all(feature = "mzml", feature = "eic"))]
     #[test]
     fn test_extract_eic_dispatch_mzml() -> io::Result<()> {
         let mut reader = MZReader::open_path("./test/data/small.mzML")?;
@@ -465,7 +468,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "mzml")]
+    #[cfg(all(feature = "mzml", feature = "eic"))]
     #[test]
     fn test_extract_eics_dispatch_batch_mzml() -> io::Result<()> {
         let mut reader = MZReader::open_path("./test/data/small.mzML")?;
@@ -493,7 +496,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     #[test]
     fn test_extract_eic_dispatch_tdf_fast_path_matches_manual_reference() -> io::Result<()> {
         let mut reader = MZReader::open_path("test/data/diaPASEF.d")?;
@@ -514,7 +517,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     #[test]
     fn test_extract_eic_dispatch_tdf_portable_fallback_matches_manual_reference() -> io::Result<()> {
         let mut reader = MZReader::open_path("test/data/diaPASEF.d")?;
@@ -540,7 +543,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     #[test]
     fn test_tdf_spectrum_and_frame_compatibility_after_eic_integration() -> io::Result<()> {
         let mut reader = MZReader::open_path("test/data/diaPASEF.d")?;
@@ -581,7 +584,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     #[test]
     #[ignore = "local benchmark against desktop Bruker datasets"]
     fn test_extract_eic_bruker_desktop_regression() -> io::Result<()> {
@@ -655,7 +658,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     #[test]
     #[ignore = "local smoke test against desktop Bruker datasets"]
     fn test_extract_eic_bruker_desktop_smoke() -> io::Result<()> {
@@ -716,7 +719,7 @@ mod test {
         Ok(())
     }
 
-    #[cfg(feature = "bruker_tdf")]
+    #[cfg(all(feature = "bruker_tdf", feature = "eic"))]
     #[test]
     #[ignore = "local benchmark against desktop Bruker datasets (fast path only)"]
     fn test_extract_eic_bruker_desktop_fast_bench() -> io::Result<()> {

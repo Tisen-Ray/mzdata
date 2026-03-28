@@ -121,6 +121,8 @@
 //! - `parallelism` - Enables `rayon` parallel iterators on a small number of internal operations to speed up some operations relating to decompression signal processing. This is unlikely to be notice-able in most cases. More benefit is had by simply processing multiple spectra in parallel using `rayon`'s bridging adapters.
 //!
 pub mod io;
+#[cfg(feature = "massql")]
+pub mod massql;
 pub mod meta;
 #[macro_use]
 pub mod params;
@@ -129,6 +131,7 @@ pub mod spectrum;
 pub mod utils;
 
 /// Crate-root access to the reader-native EIC query, result, and trait surface.
+#[cfg(feature = "eic")]
 pub use crate::io::{
     EICError, EICProgress, EICProgressUnit, EICQuery, ExtractedIonChromatogram,
     ExtractedIonChromatogramSource,
@@ -151,6 +154,10 @@ pub use crate::io::thermo::ThermoRawReader;
 pub use crate::params::{Param, ParamList};
 
 pub use crate::spectrum::{CentroidSpectrum, RawSpectrum, Spectrum};
+
+/// MassQL query interface for AI-driven mass spectrometry data analysis
+#[cfg(feature = "massql")]
+pub use crate::massql::*;
 
 #[cfg(doc)]
 pub mod tutorial;

@@ -45,6 +45,14 @@ doc-scrape-examples = true
 name = "mzconvert"
 doc-scrape-examples = true
 
+[[example]]
+name = "massql_ai_usage"
+required-features = ["massql"]
+
+[[example]]
+name = "bruker_eic"
+required-features = ["bruker_tdf", "nalgebra", "eic"]
+
 [lib]
 name = "mzdata"
 # src = "src/lib.rs"
@@ -54,8 +62,8 @@ lto = true
 debug = true
 
 [features]
-# default = ["nalgebra", "parallelism", "mzsignal", "zlib-ng-compat"]
-default = ["zlib-ng-compat", "mgf", "mzml"]
+# default = ["nalgebra", "parallelism", "mzsignal", "zlib-ng-compat", "eic"]
+default = ["zlib-ng-compat", "mgf", "mzml", "eic"]
 
 checksum = ["dep:md5", "dep:sha1", "dep:base16ct"]
 
@@ -106,6 +114,14 @@ bruker_tdf = [
     "dep:rusqlite",
     "mzsignal",
     "checksum",
+]
+
+eic = []
+
+massql = [
+    "dep:serde_json",
+    "dep:rayon",
+    "serde",
 ]
 
 doc-only = []

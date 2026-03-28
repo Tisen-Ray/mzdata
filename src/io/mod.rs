@@ -6,6 +6,7 @@
 //!
 
 mod infer_format;
+#[cfg(feature = "eic")]
 mod eic;
 pub mod mgf;
 pub mod mzml;
@@ -26,10 +27,12 @@ pub use crate::io::infer_format::{
     infer_format, infer_from_path, infer_from_stream, IMMZReaderType, MZReader, MZReaderBuilder,
     MZReaderType, MassSpectrometryFormat, MassSpectrometryReadWriteProcess, Sink, Source,
 };
+
 /// Reader-native EIC query, result, and trait exports.
 ///
 /// Extracted ion chromatograms are computed views returned through reader APIs,
 /// not file-native chromatogram objects.
+#[cfg(feature = "eic")]
 pub use crate::io::eic::{
     EICError, EICProgress, EICProgressUnit, EICQuery, ExtractedIonChromatogram,
     ExtractedIonChromatogramSource,

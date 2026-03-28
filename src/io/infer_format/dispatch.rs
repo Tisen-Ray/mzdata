@@ -34,11 +34,16 @@ use crate::io::thermo::ThermoRawReaderType;
 use crate::io::tdf::{TDFSpectrumReaderType, TDFFrameReaderType};
 
 use crate::io::traits::{ChromatogramSource, StreamingSpectrumIterator};
+
+#[cfg(feature = "eic")]
 use crate::io::{
     EICError, EICProgress, EICQuery, ExtractedIonChromatogram,
     ExtractedIonChromatogramSource,
 };
+
+#[cfg(feature = "eic")]
 use super::super::eic::{extract_eics_from_spectra, extract_eics_from_spectra_with_progress};
+
 use crate::io::{DetailLevel, SpectrumSourceWithMetadata};
 
 use super::{infer_format, infer_from_stream, MassSpectrometryFormat};
@@ -701,12 +706,12 @@ impl<C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
 /// Forward the shared EIC reader trait through the format-dispatch wrapper so
 /// callers keep using the normal `reader.extract_eic(...)` / `extract_eics(...)`
 /// style without introducing a separate analytical entry point.
+#[cfg(feature = "eic")]
 impl<
         R: io::Read + io::Seek,
         C: CentroidLike + From<CentroidPeak> + BuildFromArrayMap,
         D: DeconvolutedCentroidLike + From<DeconvolutedPeak> + BuildFromArrayMap,
-    > ExtractedIonChromatogramSource<C, D, MultiLayerSpectrum<C, D>> for MZReaderType<R, C, D>
-{
+    > ExtractedIonChromatogramSource<C, D, MultiLayerSpectrum<C, D>> for MZReaderType<R, C, D> {
     fn extract_eics(&mut self, queries: &[EICQuery]) -> Result<Vec<ExtractedIonChromatogram>, EICError> {
         match self {
             #[cfg(feature = "mzml")]

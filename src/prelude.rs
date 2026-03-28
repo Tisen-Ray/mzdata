@@ -8,6 +8,7 @@ pub use crate::io::traits::{
     IntoIonMobilityFrameSource,
 };
 /// Prelude exposure for the shared reader-native EIC query, result, and trait surface.
+#[cfg(feature = "eic")]
 pub use crate::io::{
     EICError, EICProgress, EICProgressUnit, EICQuery, ExtractedIonChromatogram,
     ExtractedIonChromatogramSource,
