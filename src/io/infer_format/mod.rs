@@ -103,6 +103,7 @@ mod test {
     }
 
     #[cfg(feature = "eic")]
+    #[allow(dead_code)]
     fn assert_points_match(actual: &[(f64, f32)], expected: &[(f64, f32)]) {
         assert_eq!(actual.len(), expected.len());
         for ((time, intensity), (expected_time, expected_intensity)) in
