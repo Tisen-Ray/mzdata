@@ -24,7 +24,7 @@ use crate::{
     io::{
         traits::{
             AsyncRandomAccessSpectrumIterator, AsyncSpectrumSource,
-            SpectrumStream,
+            SpectrumStream, AsyncGeneric3DIonMobilityFrameSource, AsyncIntoIonMobilityFrameSource
         },
         utils::DetailLevel,
     },
@@ -38,6 +38,7 @@ use crate::{
         bindata::BuildFromArrayMap,
         spectrum_types::MultiLayerSpectrum,
         Chromatogram,
+        HasIonMobility,
     },
 };
 
@@ -160,7 +161,7 @@ impl<
      */
     async fn parse_metadata(&mut self) -> Result<(), MzMLParserError> {
         let mut reader = Reader::from_reader(&mut self.handle);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         let mut accumulator = FileMetadataBuilder {
             instrument_id_map: Some(&mut self.instrument_id_map),
             ..Default::default()
@@ -207,7 +208,7 @@ impl<
                     };
                 }
                 Ok(Event::Empty(ref e)) => {
-                    match accumulator.empty_element(e, self.state, reader.buffer_position()) {
+                    match accumulator.empty_element(e, self.state, reader.buffer_position() as usize) {
                         Ok(state) => {
                             self.state = state;
                         }
@@ -221,10 +222,10 @@ impl<
                     break;
                 }
                 Err(err) => match &err {
-                    XMLError::EndEventMismatch {
+                    XMLError::IllFormed(quick_xml::errors::IllFormedError::MismatchedEndTag {
                         expected,
                         found: _found,
-                    } => {
+                    }) => {
                         if expected.is_empty() && self.state == MzMLParserState::Resume {
                             continue;
                         } else {
@@ -291,7 +292,7 @@ impl<
         mut accumulator: MzMLSpectrumBuilder<'a, C, D>,
     ) -> Result<(usize, MzMLSpectrumBuilder<'a, C, D>), MzMLParserError> {
         let mut reader = Reader::from_reader(&mut self.handle);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         accumulator.instrument_id_map = Some(&mut self.instrument_id_map);
         if let Some(val) = self.run.default_data_processing_id.as_ref() {
             accumulator.set_run_data_processing(Some(val.clone().into()));
@@ -346,7 +347,7 @@ impl<
                     };
                 }
                 Ok(Event::Empty(ref e)) => {
-                    match accumulator.empty_element(e, self.state, reader.buffer_position()) {
+                    match accumulator.empty_element(e, self.state, reader.buffer_position() as usize) {
                         Ok(state) => {
                             self.state = state;
                         }
@@ -362,10 +363,10 @@ impl<
                     break;
                 }
                 Err(err) => match &err {
-                    XMLError::EndEventMismatch {
+                    XMLError::IllFormed(quick_xml::errors::IllFormedError::MismatchedEndTag {
                         expected,
                         found: _found,
-                    } => {
+                    }) => {
                         if expected.is_empty() && self.state == MzMLParserState::Resume {
                             continue;
                         } else {
@@ -592,7 +593,7 @@ impl IndexedMzMLIndexExtractor {
                         Ok(attr) => {
                             if attr.key.as_ref() == b"idRef" {
                                 self.last_id = attr
-                                    .unescape_value()
+                                    .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                                     .expect("Error decoding idRef")
                                     .to_string();
                             }
@@ -609,7 +610,7 @@ impl IndexedMzMLIndexExtractor {
                         Ok(attr) => {
                             if attr.key.as_ref() == b"name" {
                                 let index_name = attr
-                                    .unescape_value()
+                                    .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                                     .expect("Error decoding idRef")
                                     .to_string();
                                 match index_name.as_ref() {
@@ -656,8 +657,10 @@ impl IndexedMzMLIndexExtractor {
     ) -> Result<IndexParserState, XMLError> {
         match state {
             IndexParserState::SpectrumIndexList => {
-                let bin = event
-                    .unescape()
+                let decoded = event
+                    .decode()
+                    .expect("Failed to decode spectrum offset");
+                let bin = quick_xml::escape::unescape(&decoded)
                     .expect("Failed to unescape spectrum offset");
                 if let Ok(offset) = bin.parse::<u64>() {
                     if !self.last_id.is_empty() {
@@ -669,8 +672,10 @@ impl IndexedMzMLIndexExtractor {
                 }
             }
             IndexParserState::ChromatogramIndexList => {
-                let bin = event
-                    .unescape()
+                let decoded = event
+                    .decode()
+                    .expect("Failed to decode chromatogram offset");
+                let bin = quick_xml::escape::unescape(&decoded)
                     .expect("Failed to unescape chromatogram offset");
                 if let Ok(offset) = bin.parse::<u64>() {
                     if !self.last_id.is_empty() {
@@ -739,7 +744,7 @@ impl<
             .expect("Failed to seek to the index offset");
 
         let mut reader = Reader::from_reader(&mut self.handle);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
 
         loop {
             match reader.read_event_into_async(&mut self.buffer).await {
@@ -1084,6 +1089,39 @@ impl<
         Ok(self)
     }
 }
+
+impl<
+        R: AsyncReadType + AsyncSeek + AsyncSeekExt + Unpin + Send,
+        C: CentroidLike + Send + Sync + BuildFromArrayMap,
+        D: DeconvolutedCentroidLike + Send + Sync + BuildFromArrayMap,
+    > AsyncIntoIonMobilityFrameSource<C, D>
+    for MzMLReaderType<R, C, D> {
+
+    type IonMobilityFrameSource<
+        CF: FeatureLike<mzpeaks::MZ, mzpeaks::IonMobility> + Send + Sync,
+        DF: FeatureLike<mzpeaks::Mass, mzpeaks::IonMobility> + KnownCharge + Send + Sync,
+    > = AsyncGeneric3DIonMobilityFrameSource<C, D, Self, CF, DF>;
+
+    async fn try_into_frame_source<
+        CF: FeatureLike<mzpeaks::MZ, mzpeaks::IonMobility> + Send + Sync,
+        DF: FeatureLike<mzpeaks::Mass, mzpeaks::IonMobility> + KnownCharge + Send + Sync,
+    >(
+        mut self,
+    ) -> Result<Self::IonMobilityFrameSource<CF, DF>, crate::io::IntoIonMobilityFrameSourceError>
+    {
+        match self.has_ion_mobility().await {
+            Some(dim) => {
+                if matches!(dim, HasIonMobility::Dimension) {
+                    Ok(AsyncGeneric3DIonMobilityFrameSource::new(self))
+                } else {
+                    Err(crate::io::IntoIonMobilityFrameSourceError::ConversionNotPossible)
+                }
+            },
+            None => Err(crate::io::IntoIonMobilityFrameSourceError::NoIonMobilityFramesFound),
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod test {

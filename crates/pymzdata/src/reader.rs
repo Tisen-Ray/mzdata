@@ -1,9 +1,8 @@
 use std::fs;
 
 use mzdata::io::{DetailLevel, IMMZReaderType, MZReader, MZFileReader};
-use mzdata::prelude::{
-    IonMobilityFrameSource, IntoIonMobilityFrameSource, SpectrumSource,
-};
+use mzdata::meta::MSDataFileMetadata;
+use mzdata::prelude::*;
 use mzpeaks::{
     feature::{ChargedFeature, Feature},
     IonMobility, Mass, MZ,
@@ -11,6 +10,9 @@ use mzpeaks::{
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
+use crate::meta::{
+    PyDataProcessing, PyFileDescription, PyInstrumentConfiguration, PyMSRun, PySample, PySoftware,
+};
 use crate::spectrum::{PyIonMobilityFrame, PySpectrum, RawIonMobilityFrame};
 
 // ---------------------------------------------------------------------------
@@ -90,8 +92,9 @@ impl PyDetailLevel {
 
 /// A file-based mass spectrometry reader.
 ///
-/// Supports mzML, MGF, Thermo RAW, and Bruker TDF formats. Use as a context
-/// manager (``with`` block) for automatic resource cleanup.
+/// Supports mzML (including indexed mzML), MGF, Bruker TDF, and imzML formats.
+/// Thermo RAW is supported when its native runtime dependencies are available.
+/// Use as a context manager (``with`` block) for automatic resource cleanup.
 ///
 /// Example::
 ///
@@ -99,7 +102,7 @@ impl PyDetailLevel {
 ///         for spectrum in reader:
 ///             print(spectrum.id, spectrum.ms_level)
 ///
-#[pyclass(name = "MZReader", module = "pymzdata")]
+#[pyclass(name = "MZReader", module = "pymzdata", mapping)]
 pub struct PyMZReader {
     inner: Option<RawMZReader>,
 }
@@ -158,6 +161,10 @@ impl PyMZReader {
         self.inner.as_ref().map(|r| r.len()).unwrap_or(0)
     }
 
+    fn __getitem__(&mut self, index: usize) -> PyResult<Option<PySpectrum>> {
+        self.get_by_index(index)
+    }
+
     // ---- Random access ----------------------------------------------------
 
     /// Retrieve a spectrum by its native ID string.
@@ -193,6 +200,13 @@ impl PyMZReader {
             .map(|s| s.into()))
     }
 
+    /// Reset the reader, returning the stream to the starting position, if possible.
+    fn reset(&mut self) -> PyResult<()> {
+        self.require_open()?;
+        self.inner.as_mut().map(|r| r.reset());
+        Ok(())
+    }
+
     // ---- Detail level property --------------------------------------------
 
     /// The detail level used when loading spectra.
@@ -217,7 +231,12 @@ impl PyMZReader {
 
     /// Convert this reader to an IMMZReader for ion mobility frame access.
     ///
-    /// Raises ``RuntimeError`` if the file does not contain ion mobility data.
+    /// This *consumes* the reader: the underlying file reader is moved into the returned
+    /// ``IMMZReader``, leaving this ``MZReader`` closed (``closed()`` becomes ``True`` and any
+    /// further use raises ``RuntimeError``).
+    ///
+    /// Raises ``RuntimeError`` if the reader is already closed, or if the file does not contain ion
+    /// mobility data.
     fn into_frame_reader(&mut self) -> PyResult<PyIMMZReader> {
         let inner = self.inner.take().ok_or_else(|| {
             PyRuntimeError::new_err("Reader is already closed")
@@ -228,6 +247,86 @@ impl PyMZReader {
         Ok(PyIMMZReader {
             inner: Some(frame_source),
         })
+    }
+
+    // ---- File metadata (MSDataFileMetadata) -----------------------------------
+
+    /// The file-level description: content types and source files.
+    fn file_description(&self) -> PyResult<PyFileDescription> {
+        self.require_open()?;
+        Ok(PyFileDescription(
+            self.inner.as_ref().unwrap().file_description().clone(),
+        ))
+    }
+
+    /// All instrument configurations keyed by their id, returned as a list sorted by id.
+    fn instrument_configurations(&self) -> PyResult<Vec<PyInstrumentConfiguration>> {
+        self.require_open()?;
+        let mut configs: Vec<_> = self
+            .inner
+            .as_ref()
+            .unwrap()
+            .instrument_configurations()
+            .values()
+            .cloned()
+            .map(PyInstrumentConfiguration)
+            .collect();
+        configs.sort_by_key(|c| c.0.id);
+        Ok(configs)
+    }
+
+    /// All data processing pipelines defined in the file.
+    fn data_processings(&self) -> PyResult<Vec<PyDataProcessing>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .data_processings()
+            .iter()
+            .cloned()
+            .map(PyDataProcessing)
+            .collect())
+    }
+
+    /// All software entries defined in the file.
+    fn softwares(&self) -> PyResult<Vec<PySoftware>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .softwares()
+            .iter()
+            .cloned()
+            .map(PySoftware)
+            .collect())
+    }
+
+    /// All sample entries defined in the file.
+    fn samples(&self) -> PyResult<Vec<PySample>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .samples()
+            .iter()
+            .cloned()
+            .map(PySample)
+            .collect())
+    }
+
+    /// The run-level metadata, if present.
+    fn run_description(&self) -> PyResult<Option<PyMSRun>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .run_description()
+            .cloned()
+            .map(PyMSRun))
     }
 
     fn __repr__(&self) -> String {
@@ -268,7 +367,7 @@ impl PyMZReader {
 ///         for frame in reader:
 ///             print(frame.id, frame.ms_level)
 ///
-#[pyclass(name = "IMMZReader", module = "pymzdata")]
+#[pyclass(name = "IMMZReader", module = "pymzdata", mapping)]
 pub struct PyIMMZReader {
     pub inner: Option<RawIMMZReader>,
 }
@@ -335,7 +434,18 @@ impl PyIMMZReader {
             .unwrap_or(0)
     }
 
+    fn __getitem__(&mut self, index: usize) -> PyResult<Option<PyIonMobilityFrame>> {
+        self.get_by_index(index)
+    }
+
     // ---- Random access ----------------------------------------------------
+
+    /// Reset the reader, returning the stream to the starting position, if possible.
+    fn reset(&mut self) -> PyResult<()> {
+        self.require_open()?;
+        self.inner.as_mut().map(|r| r.reset());
+        Ok(())
+    }
 
     /// Retrieve a frame by its native ID string.
     fn get_by_id(&mut self, id: &str) -> PyResult<Option<PyIonMobilityFrame>> {
@@ -376,6 +486,86 @@ impl PyIMMZReader {
         })?;
         inner.set_detail_level(parse_detail_level(level)?);
         Ok(())
+    }
+
+    // ---- File metadata (MSDataFileMetadata) -----------------------------------
+
+    /// The file-level description: content types and source files.
+    fn file_description(&self) -> PyResult<PyFileDescription> {
+        self.require_open()?;
+        Ok(PyFileDescription(
+            self.inner.as_ref().unwrap().file_description().clone(),
+        ))
+    }
+
+    /// All instrument configurations keyed by their id, returned as a list sorted by id.
+    fn instrument_configurations(&self) -> PyResult<Vec<PyInstrumentConfiguration>> {
+        self.require_open()?;
+        let mut configs: Vec<_> = self
+            .inner
+            .as_ref()
+            .unwrap()
+            .instrument_configurations()
+            .values()
+            .cloned()
+            .map(PyInstrumentConfiguration)
+            .collect();
+        configs.sort_by_key(|c| c.0.id);
+        Ok(configs)
+    }
+
+    /// All data processing pipelines defined in the file.
+    fn data_processings(&self) -> PyResult<Vec<PyDataProcessing>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .data_processings()
+            .iter()
+            .cloned()
+            .map(PyDataProcessing)
+            .collect())
+    }
+
+    /// All software entries defined in the file.
+    fn softwares(&self) -> PyResult<Vec<PySoftware>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .softwares()
+            .iter()
+            .cloned()
+            .map(PySoftware)
+            .collect())
+    }
+
+    /// All sample entries defined in the file.
+    fn samples(&self) -> PyResult<Vec<PySample>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .samples()
+            .iter()
+            .cloned()
+            .map(PySample)
+            .collect())
+    }
+
+    /// The run-level metadata, if present.
+    fn run_description(&self) -> PyResult<Option<PyMSRun>> {
+        self.require_open()?;
+        Ok(self
+            .inner
+            .as_ref()
+            .unwrap()
+            .run_description()
+            .cloned()
+            .map(PyMSRun))
     }
 
     fn __repr__(&self) -> String {

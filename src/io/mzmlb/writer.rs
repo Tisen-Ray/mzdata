@@ -39,6 +39,8 @@ use crate::spectrum::{ArrayType, BinaryArrayMap, Chromatogram, ChromatogramLike,
 use crate::io::mzml::{MzMLWriterError, MzMLWriterState, MzMLWriterType};
 use crate::RawSpectrum;
 
+use super::common::binary_array_data_type_to_descriptor;
+
 macro_rules! bstart {
     ($e:tt) => {
         BytesStart::from_content($e, $e.len())
@@ -231,7 +233,7 @@ impl BinaryDataArrayBuffer {
         filters: &[hdf5::filters::Filter],
         dtype: BinaryDataArrayType,
     ) -> Result<Self, MzMLbWriterError> {
-        let td = TypeDescriptor::from(&dtype);
+        let td = binary_array_data_type_to_descriptor(&dtype);
         let builder = builder
             .set_filters(filters)
             .empty_as(&td)
@@ -792,7 +794,7 @@ where
             .write_param_list(chromatogram.params().iter())?;
 
         if let Some(precursor) = chromatogram.precursor() {
-            self.mzml_writer.write_precursor(precursor)?;
+            self.mzml_writer.write_precursor(core::slice::from_ref(precursor).into_iter())?;
         }
         self.write_binary_data_arrays(
             &chromatogram.arrays,

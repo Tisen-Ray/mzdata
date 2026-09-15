@@ -33,7 +33,7 @@ use crate::{
     prelude::*,
     spectrum::{
         bindata::{ArrayType, BinaryCompressionType, BuildFromArrayMap},
-        chromatogram::Chromatogram,
+        Chromatogram,
         spectrum_types::MultiLayerSpectrum,
         IsolationWindow, Precursor, ScanWindow, SelectedIon,
     },
@@ -91,7 +91,9 @@ pub fn is_imzml(buffer: &[u8]) -> bool {
                         for attr in e.attributes() {
                             if let Ok(attr) = attr {
                                 if attr.key.as_ref() == b"id" {
-                                    if let Ok(value) = attr.unescape_value() {
+                                    if let Ok(value) =
+                                        attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                    {
                                         if value.as_ref() == "IMS" {
                                             return true;
                                         }
@@ -112,7 +114,7 @@ pub fn is_imzml(buffer: &[u8]) -> bool {
             Ok(Event::Eof) => return false,
             Ok(_) => {}
             Err(e) => {
-                log::warn!("XML parsing error while checking for imzML format: {}", e);
+                log::debug!("XML parsing error while checking for imzML format: {}", e);
                 return false;
             }
         }
@@ -310,7 +312,7 @@ impl<'a, C: CentroidLike + BuildFromArrayMap, D: DeconvolutedCentroidLike + Buil
         self.inner.into_spectrum(spectrum);
     }
 
-    fn into_chromatogram(self, chromatogram: &mut crate::spectrum::chromatogram::Chromatogram) {
+    fn into_chromatogram(self, chromatogram: &mut crate::spectrum::Chromatogram) {
         self.inner.into_chromatogram(chromatogram);
     }
 
@@ -359,6 +361,14 @@ impl<'a, C: CentroidLike + BuildFromArrayMap, D: DeconvolutedCentroidLike + Buil
 
     fn isolation_window_mut(&mut self) -> &mut IsolationWindow {
         self.inner.isolation_window_mut()
+    }
+
+    fn product_isolation_window_mut(&mut self) -> &mut IsolationWindow {
+        self.inner.product_isolation_window_mut()
+    }
+
+    fn new_product(&mut self) -> &mut crate::spectrum::Product {
+        self.inner.new_product()
     }
 }
 
@@ -640,7 +650,7 @@ impl<
      */
     fn parse_metadata(&mut self) -> Result<(), MzMLParserError> {
         let mut reader = Reader::from_reader(&mut self.handle);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         let mut accumulator = ImzmlMetadataBuilder {
             mzml_metadata_builder: FileMetadataBuilder {
                 instrument_id_map: Some(&mut self.instrument_id_map),
@@ -694,7 +704,11 @@ impl<
                     };
                 }
                 Ok(Event::Empty(ref e)) => {
-                    match accumulator.empty_element(e, self.state, reader.buffer_position()) {
+                    match accumulator.empty_element(
+                        e,
+                        self.state,
+                        reader.buffer_position() as usize,
+                    ) {
                         Ok(state) => {
                             self.state = state;
                         }
@@ -708,10 +722,10 @@ impl<
                     break;
                 }
                 Err(err) => match &err {
-                    XMLError::EndEventMismatch {
+                    XMLError::IllFormed(quick_xml::errors::IllFormedError::MismatchedEndTag {
                         expected,
                         found: _found,
-                    } => {
+                    }) => {
                         if expected.is_empty() && self.state == MzMLParserState::Resume {
                             continue;
                         } else {
@@ -823,7 +837,7 @@ impl<
         }
 
         let mut reader = Reader::from_reader(&mut self.handle);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         accumulator = accumulator.borrow_metadata(
             &mut self.instrument_id_map,
             &mut self.reference_param_groups,
@@ -886,7 +900,11 @@ impl<
                     };
                 }
                 Ok(Event::Empty(ref e)) => {
-                    match accumulator.empty_element(e, self.state, reader.buffer_position()) {
+                    match accumulator.empty_element(
+                        e,
+                        self.state,
+                        reader.buffer_position() as usize,
+                    ) {
                         Ok(state) => {
                             self.state = state;
                         }
@@ -899,10 +917,10 @@ impl<
                     break;
                 }
                 Err(err) => match &err {
-                    XMLError::EndEventMismatch {
+                    XMLError::IllFormed(quick_xml::errors::IllFormedError::MismatchedEndTag {
                         expected,
                         found: _found,
-                    } => {
+                    }) => {
                         if expected.is_empty() && self.state == MzMLParserState::Resume {
                             continue;
                         } else {
@@ -1089,7 +1107,7 @@ impl<
             Err(err) => return Err(MzMLParserError::IOError(self.state, err)),
         };
         let mut reader = Reader::from_reader(&mut self.handle);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         let matched_tag = match reader.read_event_into(&mut self.buffer) {
             Ok(event) => match event {
                 Event::Start(ref e) => {
@@ -1224,6 +1242,10 @@ impl<
 
     fn get_chromatogram_by_index(&mut self, index: usize) -> Option<Chromatogram> {
         self.get_chromatogram_by_index(index)
+    }
+
+    fn count_chromatograms(&self) -> usize {
+        self.chromatogram_index.len()
     }
 }
 

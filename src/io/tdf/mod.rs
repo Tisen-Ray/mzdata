@@ -9,6 +9,20 @@ mod constants;
 mod arrays;
 mod sql;
 mod reader;
+mod calibration;
 
 pub use reader::{TDFFrameReader, TDFFrameReaderType, TDFSpectrumReader, TDFSpectrumReaderType, is_tdf};
 pub use sql::{ChromatographyData, SQLTrace};
+
+pub use calibration::{
+    CalibrationParameters,
+    IonMobilityCalibrationError,
+    MzCalibration,
+    TimsCalibration,
+    MzCalibrationError,
+    clamp_u32,
+    TimsCalibrationModel,
+    TimsCalibrationModel2,
+    MzCalibrationModel,
+    MzCalibrationModel2
+};

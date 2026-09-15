@@ -5,6 +5,264 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog],
 and this project adheres to [Semantic Versioning].
 
+## [0.66.7] - 2026-09-11
+
+### Added
+
+- Keep both isolation window offsets when they precede the target m/z (#58)
+`populate_isolation_window` moved the window to `IsolationWindowState::Offset`
+on the first offset param and dropped the second one (`_ => {}`), so once the
+target arrived the missing offset resolved as 0 and one bound collapsed onto
+the target. ProteoWizard's Waters writer emits `upper offset, lower offset,
+target` in that order, so every pwiz Waters MSe mzML read back with
+`lower_bound == target`.
+
+Store the second offset while in `Offset`; the target arm already resolves
+both bounds. Adds an inline two-spectrum mzML test covering both orders.
+- Expand isolation window adjustments to handle both the preferred and deprecated code paths, support no isolation flag
+- Add `IsolationWindowBuilder` to deduplicate isolation window building logic
+- Add `PeakPicking` wrapper to transparently add peak picking behavior to `SpectrumSource` implementations
+
+### Changed
+
+- Rename bruker_tdf::MzCalbrationModel1 to 2, to reflect the actual version handled
+
+## [0.66.6] - 2026-08-30
+
+### Added
+
+- Add  `curie` const function to `cvmap` enums
+- Add support for supplemental activation in `thermo` reader
+- Add `__getitem__` to `pymzdata::MZReader`
+
+### Changed
+
+- Update wasm wrapper to be consistently async
+
+## [0.66.5] - 2026-08-22
+
+### Changed
+
+- Disable tdf mz calibration models, not consistently better
+
+## [0.66.4] - 2026-08-20
+
+### Fixed
+
+- Properly export `MzCalibrationModel1`, `TimsCalibrationModel1` types
+
+## [0.66.3] - 2026-08-20
+
+### Added
+
+- Add conversion traits to `Value::List` and `ValueRef::List`
+- Add `as_format` to `AsyncMZReaderType`
+- Add `AsyncIonMobilityFrameSource`
+- Add `AsyncGeneric3DIonMobilityFrameSource` and `AsyncIntoIonMobilityFrameSource`
+- Add impl of `AsyncIntoIonMobilityFrameSource ` for `AsyncMZReaderType` and `AsyncMzMLReaderType`
+
+### Documentation
+
+- Restore old wrapper module for `params`, copy module docs
+- Rewrite module comment
+
+### Fixed
+
+- Fix up doctest when cached CV is not available
+- Implement timstof calibration
+- Enabling `serde` feature properly makes `mzdata-spectrum` defined types serializable
+- Expose timstof calibration parameters
+
+## [0.66.2] - 2026-08-16
+
+### Documentation
+
+- Massive documentation update for `mzdata_param`
+
+### Removed
+
+- Remove mzmlb from docsrs, enable cv
+
+## [0.66.1] - 2026-08-15
+
+### Fixed
+
+- Restore `numpress` feature pipeline
+
+## [0.66.0] - 2026-08-15
+
+### Added
+
+- Add `reset` to `pymzdata.MZReader` and `pymzdata.IMZReader`
+- Add `IndexArray`
+
+### Changed
+
+- Factor several submodules into sub-crates to allow controlled vocabulary factorization with static data
+- Update publishing workflow
+- Factor spectrum submodule into a separate crate covering just those specific modules independent of all IO. Retain IO modifiers and tests in the main crate
+- Move `SpectrumGroup` and associated types to `mzdata-spectrum`, leaving iterators producing them in the main crate
+
+### Documentation
+
+- Describe pymzdata bindings (#57)
+
+### Fixed
+
+- Fix CI errors
+- Fix CI errors
+
+## [0.65.4] - 2026-07-14
+
+### Fixed
+
+- IndexedmzML `fileChecksum` is now SHA-1 as required by the XSD, no longer MD5
+
+### Removed
+
+- Upgrade quick-xml 0.30 -> 0.41 (RUSTSEC-2026-0194) (#53)
+Clears RUSTSEC-2026-0194 (quadratic run time when checking a start tag
+for duplicate attribute names), which is reachable here: every
+BytesStart::attributes() call in the mzML/imzML reading path uses the
+default checked iterator (.with_checks(false) is never used), so a
+crafted mzML/imzML file with a start tag carrying a large number of
+attributes can pin a parsing thread for minutes (per the advisory's own
+measurements). RUSTSEC-2026-0195 (unbounded NsReader namespace
+allocation) does not apply - this crate never uses NsReader, only the
+plain Reader.
+
+API changes needed for the bump:
+- escape::escape() no longer accepts a `&&str` (one macro fix in
+  writer.rs's attrib! macro, which accounts for the bulk of the diff
+  once the compiler stops cascading past it).
+- Reader::trim_text() moved to Reader::config_mut().trim_text().
+- BytesText::unescape() was removed; replaced with
+  decode() + escape::unescape(), which is what unescape() did
+  internally (decode via the reader's Decoder, then unescape XML
+  entities) - same behavior, no shortcut taken.
+- Attribute::unescape_value() is deprecated in favor of
+  normalized_value(XmlVersion::Implicit1_0), which is what
+  unescape_value() delegates to internally - so this is a like-for-like
+  swap, not a behavior change.
+- Error::EndEventMismatch moved under
+  Error::IllFormed(IllFormedError::MismatchedEndTag { .. }); field
+  names/types are unchanged.
+- Reader::buffer_position() changed from usize to u64; added casts at
+  the two call sites that need it.
+
+## [0.65.3] - 2026-07-11
+
+### Changed
+
+- Require `precursor_iter` be an `ExactSizeIterator`
+
+### Fixed
+
+- Fix `thermo` precursor_id/spectrumRef value (GH #52)
+
+## [0.65.2] - 2026-06-21
+
+### Fixed
+
+- Label each scan's peaks with its own ion mobility (#51)
+* fix(tdf): label each scan's peaks with its own ion mobility
+
+Follow-up to #50. process_3d_slice took the drift from the loop position
+(convert(i + first_scan)), tagging each scan's peaks with the next scan's
+1/K0. Indexing scans directly labels each peak with its own scan's mobility.
+Peak counts and m/z are unchanged.
+
+## [0.65.1] - 2026-06-21
+
+### Fixed
+
+- Process_3d_slice mis-slices MS2/DIA frames (duplicates peaks at wrong mobility) (#50)
+* fix(tdf): correct scan-offset slicing in process_3d_slice
+
+scan_offsets holds cumulative peak offsets, not scan indices; seeding
+scan_begin with the scan index first_scan only works when first_scan == 0
+(MS1 / first window). Every PASEF/DIA MS2 window (first_scan > 0) read
+tof_indices[first_scan..scan_offsets[first_scan]] on its first iteration,
+prepending all earlier scans' peaks stamped with one wrong mobility and
+inflating per-frame MS2 peak counts ~1.4-2.0x.
+
+### Removed
+
+- Remove `BuildFromArrayMap` and `BuildArrayMapFrom` requirement for `MultiLayerSpectrum::new`
+
+## [0.65.0] - 2026-06-18
+
+### Added
+
+- Add missing imports
+- Add Product type and include it in mzML parsing
+
+### Fixed
+
+- When reading an mzML-ish file that contains no spectra, the parser no longer emits a single "dummy" spectrum.
+
+## [0.64.1] - 2026-06-07
+
+### Added
+
+- Add quadrupole bounds array types
+
+### Documentation
+
+- Update spectrum and ion mobility tutorial
+
+## [0.64.0] - 2026-06-05
+
+### Added
+
+- Add scan settings to autogenerated delegated metadata impl of `MSDataFileMetadata`
+
+### Fixed
+
+- Update PSI-MS CV and `imzml`
+- Test `scan_settings` accessors
+
+## [0.63.5] - 2026-05-12
+
+### Added
+
+- Add new `List` variant to `Value` and equivalent types, as well as `ParamValue` trait
+- Add modest support for proper handling of endianness in `DataArray`
+- Upgrade to `thermorawfilereader.rs` v0.7.0 which fixes charge states and macOS ARM support
+- Add MSE iterator behavior `SpectrumMSEIterator`  and `into_mse_iterator` for spectrum and ion mobility frame iterators
+
+### Changed
+
+- Upgrade `mzsignal` version to v1.1.9
+- Implementation detail `to_bytes` always uses little endian bytes
+- Upgrade `mzsignal` to v1.1.10
+- Upgrade `reqwest` to v0.13
+
+### Fixed
+
+- Reduce `DataArray` size by 1 byte
+- Convert non-finite charge state values to 0
+
+## [0.63.4] - 2026-03-31
+
+### Added
+
+- Add `ChromatogramType::ElectromagneticRadiationChromatogram`
+- Add additional metric length, hertz, and volume `Unit`
+- Add `Ord` and `Hash` impls to `SpectrumType`
+- Add `is_profile` and `is_centroid` predicates to `SignalContinuity`
+- Add finalized accession codes for Zstd based compression methods
+- Add file-level metadata to the Python API
+- Update `thermorawfilereader` to v0.6.0, add Excedion to the instrument database, add `MZDATA_IGNORE_UNKNOWN_INSTRUMENT` to support ignoring unknown instrument models
+
+### Changed
+
+- Deprecate `main.rs`, point to `mzinfo.rs` example
+
+### Fixed
+
+- Start python bindings, vis wasm
+
 ## [0.63.3] - 2025-12-06
 
 ### Fixed
@@ -982,7 +1240,28 @@ using mz_read macro. This also prevents potential version mismatches.
 
 <!-- Versions -->
 
-[unreleased]: https://github.com/mobiusklein/mzdata/compare/v0.63.3...HEAD
+[unreleased]: https://github.com/mobiusklein/mzdata/compare/v0.66.7...HEAD
+[0.66.7]: https://github.com/mobiusklein/mzdata/compare/v0.66.6...v0.66.7
+[0.66.6]: https://github.com/mobiusklein/mzdata/compare/v0.66.5...v0.66.6
+[0.66.5]: https://github.com/mobiusklein/mzdata/compare/v0.66.4...v0.66.5
+[0.66.4]: https://github.com/mobiusklein/mzdata/compare/v0.66.3...v0.66.4
+[0.66.3]: https://github.com/mobiusklein/mzdata/compare/v0.66.2...v0.66.3
+[0.66.2]: https://github.com/mobiusklein/mzdata/compare/v0.66.1...v0.66.2
+[0.66.1]: https://github.com/mobiusklein/mzdata/compare/v0.66.0...v0.66.1
+[0.66.0]: https://github.com/mobiusklein/mzdata/compare/v0.66.0...v0.66.0
+[0.66.0]: https://github.com/mobiusklein/mzdata/compare/v0.66.0...v0.66.0
+[0.66.0]: https://github.com/mobiusklein/mzdata/compare/v0.65.5...v0.66.0
+[0.65.5]: https://github.com/mobiusklein/mzdata/compare/v0.65.4...v0.65.5
+[0.65.4]: https://github.com/mobiusklein/mzdata/compare/v0.65.4...v0.65.4
+[0.65.4]: https://github.com/mobiusklein/mzdata/compare/v0.65.3...v0.65.4
+[0.65.3]: https://github.com/mobiusklein/mzdata/compare/v0.65.2...v0.65.3
+[0.65.2]: https://github.com/mobiusklein/mzdata/compare/v0.65.1...v0.65.2
+[0.65.1]: https://github.com/mobiusklein/mzdata/compare/v0.65.0...v0.65.1
+[0.65.0]: https://github.com/mobiusklein/mzdata/compare/v0.64.1...v0.65.0
+[0.64.1]: https://github.com/mobiusklein/mzdata/compare/v0.64.0...v0.64.1
+[0.64.0]: https://github.com/mobiusklein/mzdata/compare/v0.63.5...v0.64.0
+[0.63.5]: https://github.com/mobiusklein/mzdata/compare/v0.63.4...v0.63.5
+[0.63.4]: https://github.com/mobiusklein/mzdata/compare/v0.63.3...v0.63.4
 [0.63.3]: https://github.com/mobiusklein/mzdata/compare/v0.63.2...v0.63.3
 [0.63.2]: https://github.com/mobiusklein/mzdata/compare/v0.63.1...v0.63.2
 [0.63.1]: https://github.com/mobiusklein/mzdata/compare/v0.63.0...v0.63.1

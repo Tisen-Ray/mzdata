@@ -15,10 +15,12 @@ pub use crate::io::{
 };
 
 #[cfg(feature = "async_partial")]
-pub use crate::io::traits::AsyncSpectrumSource;
-
+pub use crate::io::traits::{
+    AsyncIntoIonMobilityFrameSource, AsyncIonMobilityFrameSource, AsyncSpectrumSource,
+};
+pub use crate::io::_SourceFileExt;
 pub use crate::meta::MSDataFileMetadata;
-pub use crate::params::{ParamDescribed, ParamLike, ParamValue, ParamDescribedRead};
+pub use crate::params::{ParamDescribed, ParamLike, ParamValue};
 pub use crate::spectrum::bindata::{
     BuildArrayMapFrom, BuildFromArrayMap, ByteArrayView, ByteArrayViewMut,
     BuildArrayMap3DFrom, BuildFromArrayMap3D
@@ -26,6 +28,8 @@ pub use crate::spectrum::bindata::{
 pub use crate::spectrum::{
     IonProperties, PrecursorSelection, SpectrumLike, IonMobilityMeasure, IonMobilityFrameLike,
     SpectrumGrouping, IonMobilityFrameGrouping, ChromatogramLike,
+    PrecursorRetrieval,
+    group::{SpectrumMSEIteratorExt, IonMobilityFrameMSEIteratorExt},
 };
 
 #[cfg(feature = "mzsignal")]

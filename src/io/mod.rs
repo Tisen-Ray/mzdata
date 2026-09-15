@@ -26,6 +26,7 @@ pub(crate) mod compression;
 pub use crate::io::infer_format::{
     infer_format, infer_from_path, infer_from_stream, IMMZReaderType, MZReader, MZReaderBuilder,
     MZReaderType, MassSpectrometryFormat, MassSpectrometryReadWriteProcess, Sink, Source,
+    _SourceFileExt,
 };
 
 /// Reader-native EIC query, result, and trait exports.
@@ -67,6 +68,15 @@ pub use crate::io::traits::{
 
 #[cfg(feature = "async_partial")]
 pub use crate::io::traits::{AsyncSpectrumSource, AsyncRandomAccessSpectrumIterator, SpectrumStream};
+
+#[cfg(feature = "async_partial")]
+pub use crate::io::traits::{
+    AsyncGeneric3DIonMobilityFrameSource, AsyncIntoIonMobilityFrameSource,
+    AsyncIonMobilityFrameSource, AsyncRandomAccessIonMobilityFrameIterator, IonMobilityFrameStream,
+};
+
+#[cfg(feature = "mzsignal")]
+pub use traits::PeakPicking;
 
 #[cfg(feature = "async")]
 pub use crate::io::traits::AsyncMZFileReader;

@@ -1,20 +1,18 @@
 use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::ops::Index;
-#[allow(unused)]
-use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+
 use std::{fs, io, path};
+
 
 use log::warn;
 use mzpeaks::{CentroidLike, CentroidPeak, DeconvolutedCentroidLike, DeconvolutedPeak};
 use thiserror::Error;
 
-#[allow(unused)]
-use crate::io::utils::FileSource;
 use crate::io::{DetailLevel, OffsetIndex};
 use crate::meta::{
-    DataProcessing, FileDescription, FileMetadataConfig, InstrumentConfiguration, MassSpectrometryRun, Sample, Software
+    DataProcessing, FileDescription, FileMetadataConfig, InstrumentConfiguration,
+    MassSpectrometryRun, Sample, Software,
 };
 use crate::prelude::MSDataFileMetadata;
 use crate::spectrum::group::{SpectrumGroup, SpectrumGroupingIterator};
@@ -149,7 +147,7 @@ pub trait SpectrumSource<
     /// Get the nth [`SpectrumGroup`] from this source
     fn get_group_by_index(&mut self, index: usize) -> Option<SpectrumGroup<C, D, S>>
     where
-        Self: Sized
+        Self: Sized,
     {
         self.groups().nth(index)
     }
@@ -362,28 +360,9 @@ pub trait MZFileReader<
     where
         P: Into<path::PathBuf> + Clone,
     {
-
-        #[cfg(feature = "serde")]
-        let index_file_name = FileSource::<fs::File>::from(path.clone()).index_file_name();
-
         match fs::File::open(path.into()) {
             Ok(file) => {
                 let mut reader = Self::open_file(file)?;
-                #[cfg(feature = "serde")]
-                if let Some(index_path) = &index_file_name {
-                    if index_path.exists() {
-                        let index_stream = fs::File::open(index_path)?;
-                        match reader.read_index(Box::new(io::BufReader::new(index_stream))) {
-                            Ok(_) => {}
-                            Err(_err) => {
-                                reader.construct_index_from_stream();
-                            }
-                        }
-                    } else {
-                        reader.construct_index_from_stream();
-                    }
-                }
-                #[cfg(not(feature = "serde"))]
                 reader.construct_index_from_stream();
                 Ok(reader)
             }
@@ -393,29 +372,6 @@ pub trait MZFileReader<
 
     /// Given a regular file, construct a new instance without indexing.
     fn open_file(source: fs::File) -> io::Result<Self>;
-}
-
-#[cfg(feature = "serde")]
-fn _save_index<
-    C: CentroidLike,
-    D: DeconvolutedCentroidLike,
-    S: SpectrumLike<C, D>,
->(
-    index_path: &PathBuf,
-    reader: &impl MZFileReader<C, D, S>,
-) -> io::Result<()> {
-    let index_stream = fs::File::create(index_path)?;
-    match reader.write_index(Box::new(io::BufWriter::new(index_stream))) {
-        Ok(_) => {}
-        Err(err) => {
-            warn!(
-                "Failed to write index to {} because {:?}",
-                index_path.display(),
-                err
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Errors that may occur when reading a spectrum from a [`RandomAccessSpectrumIterator`]
@@ -555,404 +511,401 @@ impl<
 {
 }
 
-/// An alternative implementation of [`SpectrumSource`] for non-rewindable underlying iterators.
-///
-/// When the source doesn't support [`io::Seek`](std::io::Seek), most reader types don't
-/// even implement [`SpectrumSource`], although they still implement
-/// [`Iterator`]. The [`StreamingSpectrumIterator`]
-/// wrapper does implement parts of [`SpectrumSource`] using less efficient
-/// mechanism, but in situations where it cannot satisfy the request, it will `panic` instead. It also,
-/// naturally doesn't support reading spectra that have already been seen as the stream cannot be reversed.
-pub struct StreamingSpectrumIterator<
-    C: CentroidLike,
-    D: DeconvolutedCentroidLike,
-    S: SpectrumLike<C, D>,
-    I: Iterator<Item = S>,
-> {
-    source: I,
-    buffer: VecDeque<S>,
-    _index: OffsetIndex,
-    _c: PhantomData<C>,
-    _d: PhantomData<D>,
-}
+mod norev {
+    use super::*;
+    use std::sync::mpsc::Receiver;
 
-impl<
-        C: CentroidLike + Send,
-        D: DeconvolutedCentroidLike + Send,
-        S: SpectrumLike<C, D> + Send,
-    > From<SpectrumReceiver<C, D, S>>
-    for StreamingSpectrumIterator<C, D, S, SpectrumReceiver<C, D, S>>
-{
-    fn from(value: SpectrumReceiver<C, D, S>) -> Self {
-        Self::new(value)
-    }
-}
-
-impl<
-        C: CentroidLike + Send,
-        D: DeconvolutedCentroidLike + Send,
-        S: SpectrumLike<C, D> + Send,
-    > From<Receiver<S>> for StreamingSpectrumIterator<C, D, S, SpectrumReceiver<C, D, S>>
-{
-    fn from(value: Receiver<S>) -> Self {
-        Self::new(value.into())
-    }
-}
-
-impl<
+    /// An alternative implementation of [`SpectrumSource`] for non-rewindable underlying iterators.
+    ///
+    /// When the source doesn't support [`io::Seek`](std::io::Seek), most reader types don't
+    /// even implement [`SpectrumSource`], although they still implement
+    /// [`Iterator`]. The [`StreamingSpectrumIterator`]
+    /// wrapper does implement parts of [`SpectrumSource`] using less efficient
+    /// mechanism, but in situations where it cannot satisfy the request, it will `panic` instead. It also,
+    /// naturally doesn't support reading spectra that have already been seen as the stream cannot be reversed.
+    pub struct StreamingSpectrumIterator<
         C: CentroidLike,
         D: DeconvolutedCentroidLike,
         S: SpectrumLike<C, D>,
         I: Iterator<Item = S>,
-    > SpectrumSource<C, D, S> for StreamingSpectrumIterator<C, D, S, I>
-{
-    fn detail_level(&self) -> &DetailLevel {
-        &DetailLevel::Full
+    > {
+        source: I,
+        buffer: VecDeque<S>,
+        _index: OffsetIndex,
+        _c: PhantomData<C>,
+        _d: PhantomData<D>,
     }
 
-    fn set_detail_level(&mut self, _detail_level: DetailLevel) {}
-
-    fn reset(&mut self) {
-        panic!("Cannot reset StreamingSpectrumIterator")
-    }
-
-    fn iter(&mut self) -> SpectrumIterator<'_, C, D, S, Self>
-    where
-        Self: Sized,
+    impl<C: CentroidLike + Send, D: DeconvolutedCentroidLike + Send, S: SpectrumLike<C, D> + Send>
+        From<SpectrumReceiver<C, D, S>>
+        for StreamingSpectrumIterator<C, D, S, SpectrumReceiver<C, D, S>>
     {
-        panic!(
-            "Cannot create a wrapping iterator for StreamingSpectrumIterator, just use it directly"
-        )
+        fn from(value: SpectrumReceiver<C, D, S>) -> Self {
+            Self::new(value)
+        }
     }
 
-    fn get_spectrum_by_id(&mut self, id: &str) -> Option<S> {
-        self.find(|s| s.id() == id)
+    impl<C: CentroidLike + Send, D: DeconvolutedCentroidLike + Send, S: SpectrumLike<C, D> + Send>
+        From<Receiver<S>> for StreamingSpectrumIterator<C, D, S, SpectrumReceiver<C, D, S>>
+    {
+        fn from(value: Receiver<S>) -> Self {
+            Self::new(value.into())
+        }
     }
 
-    fn get_spectrum_by_index(&mut self, index: usize) -> Option<S> {
-        self.find(|s| s.index() == index)
+    impl<
+            C: CentroidLike,
+            D: DeconvolutedCentroidLike,
+            S: SpectrumLike<C, D>,
+            I: Iterator<Item = S>,
+        > SpectrumSource<C, D, S> for StreamingSpectrumIterator<C, D, S, I>
+    {
+        fn detail_level(&self) -> &DetailLevel {
+            &DetailLevel::Full
+        }
+
+        fn set_detail_level(&mut self, _detail_level: DetailLevel) {}
+
+        fn reset(&mut self) {
+            panic!("Cannot reset StreamingSpectrumIterator")
+        }
+
+        fn iter(&mut self) -> SpectrumIterator<'_, C, D, S, Self>
+        where
+            Self: Sized,
+        {
+            panic!(
+                "Cannot create a wrapping iterator for StreamingSpectrumIterator, just use it directly"
+            )
+        }
+
+        fn get_spectrum_by_id(&mut self, id: &str) -> Option<S> {
+            self.find(|s| s.id() == id)
+        }
+
+        fn get_spectrum_by_index(&mut self, index: usize) -> Option<S> {
+            self.find(|s| s.index() == index)
+        }
+
+        fn get_spectrum_by_time(&mut self, time: f64) -> Option<S> {
+            let mut placeholder: Option<S> = None;
+            let mut delta = f64::INFINITY;
+            while let Some(s) = self.next() {
+                let new_delta = (s.start_time() - time).abs();
+                if s.start_time() < time {
+                    placeholder = Some(s);
+                    delta = new_delta;
+                } else if s.start_time() >= time {
+                    if new_delta < delta {
+                        return Some(s);
+                    } else {
+                        self.push_front(s);
+                        return placeholder;
+                    }
+                }
+            }
+            None
+        }
+
+        fn get_index(&self) -> &OffsetIndex {
+            &self._index
+        }
+
+        fn set_index(&mut self, index: OffsetIndex) {
+            self._index = index
+        }
     }
 
-    fn get_spectrum_by_time(&mut self, time: f64) -> Option<S> {
-        let mut placeholder: Option<S> = None;
-        let mut delta = f64::INFINITY;
-        while let Some(s) = self.next() {
-            let new_delta = (s.start_time() - time).abs();
-            if s.start_time() < time {
-                placeholder = Some(s);
-                delta = new_delta;
-            } else if s.start_time() >= time {
-                if new_delta < delta {
-                    return Some(s);
+    impl<
+            C: CentroidLike,
+            D: DeconvolutedCentroidLike,
+            S: SpectrumLike<C, D>,
+            I: Iterator<Item = S>,
+        > Iterator for StreamingSpectrumIterator<C, D, S, I>
+    {
+        type Item = S;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if !self.buffer.is_empty() {
+                self.buffer.pop_front()
+            } else {
+                self.source.next()
+            }
+        }
+    }
+
+    impl<
+            C: CentroidLike + From<CentroidPeak>,
+            D: DeconvolutedCentroidLike + From<DeconvolutedPeak>,
+            I: Iterator<Item = MultiLayerSpectrum<C, D>>,
+        > super::super::frame::IntoIonMobilityFrameSource<C, D>
+        for StreamingSpectrumIterator<C, D, MultiLayerSpectrum<C, D>, I>
+    {
+        type IonMobilityFrameSource<
+            CF: mzpeaks::prelude::FeatureLike<mzpeaks::MZ, mzpeaks::IonMobility>,
+            DF: mzpeaks::prelude::FeatureLike<mzpeaks::Mass, mzpeaks::IonMobility> + mzpeaks::KnownCharge,
+        > = super::super::frame::Generic3DIonMobilityFrameSource<C, D, Self, CF, DF>;
+
+        fn has_ion_mobility(&mut self) -> Option<crate::spectrum::HasIonMobility> {
+            if self.buffer.is_empty() {
+                self.populate_buffer(5);
+            }
+
+            self.buffer
+                .iter()
+                .map(|s| s.has_ion_mobility_class())
+                .reduce(|a, b| a.max(b))
+        }
+
+        fn try_into_frame_source<
+            CF: mzpeaks::prelude::FeatureLike<mzpeaks::MZ, mzpeaks::IonMobility>,
+            DF: mzpeaks::prelude::FeatureLike<mzpeaks::Mass, mzpeaks::IonMobility> + mzpeaks::KnownCharge,
+        >(
+            mut self,
+        ) -> Result<Self::IonMobilityFrameSource<CF, DF>, super::super::IntoIonMobilityFrameSourceError> {
+            if let Some(state) = self.has_ion_mobility() {
+                if matches!(state, crate::spectrum::HasIonMobility::Dimension) {
+                    Ok(Self::IonMobilityFrameSource::new(self))
                 } else {
-                    self.push_front(s);
-                    return placeholder;
+                    Err(crate::io::IntoIonMobilityFrameSourceError::ConversionNotPossible)
+                }
+            } else {
+                Err(crate::io::IntoIonMobilityFrameSourceError::NoIonMobilityFramesFound)
+            }
+        }
+    }
+
+    impl<
+            C: CentroidLike,
+            D: DeconvolutedCentroidLike,
+            S: SpectrumLike<C, D>,
+            I: Iterator<Item = S>,
+        > StreamingSpectrumIterator<C, D, S, I>
+    {
+        pub fn new(source: I) -> Self {
+            Self {
+                source,
+                buffer: VecDeque::new(),
+                _index: OffsetIndex::new("spectrum".to_string()),
+                _c: PhantomData,
+                _d: PhantomData,
+            }
+        }
+
+        pub fn get_inner(&self) -> &I {
+            &self.source
+        }
+
+        pub fn get_mut(&mut self) -> &mut I {
+            &mut self.source
+        }
+
+        /// Get an immutable iterator over the pre-filled buffer.
+        ///
+        /// ## See also
+        /// [`StreamingSpectrumIterator::populate_buffer`]
+        pub fn iter_buffer(&self) -> std::collections::vec_deque::Iter<'_, S> {
+            self.buffer.iter()
+        }
+
+        /// Push a spectrum back into the stream in front of the buffer.
+        ///
+        /// ## Warning
+        /// If the spectrum is *not* from the undelying stream of spectra, then
+        /// any and all series metadata might be inconsistent.
+        fn push_front(&mut self, spectrum: S) {
+            self.buffer.push_front(spectrum);
+        }
+
+        /// Fill the buffer with at most `size` spectra
+        pub fn populate_buffer(&mut self, size: usize) {
+            for _ in 0..size {
+                if let Some(value) = self.source.next() {
+                    self.buffer.push_back(value);
+                } else {
+                    break;
                 }
             }
         }
-        None
     }
 
-    fn get_index(&self) -> &OffsetIndex {
-        &self._index
-    }
-
-    fn set_index(&mut self, index: OffsetIndex) {
-        self._index = index
-    }
-}
-
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D>,
-        I: Iterator<Item = S>,
-    > Iterator for StreamingSpectrumIterator<C, D, S, I>
-{
-    type Item = S;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.buffer.is_empty() {
-            self.buffer.pop_front()
-        } else {
-            self.source.next()
-        }
-    }
-}
-
-impl<
-        C: CentroidLike + From<CentroidPeak>,
-        D: DeconvolutedCentroidLike + From<DeconvolutedPeak>,
-        I: Iterator<Item = MultiLayerSpectrum<C, D>>,
-    > super::frame::IntoIonMobilityFrameSource<C, D>
-    for StreamingSpectrumIterator<C, D, MultiLayerSpectrum<C, D>, I>
-{
-    type IonMobilityFrameSource<
-        CF: mzpeaks::prelude::FeatureLike<mzpeaks::MZ, mzpeaks::IonMobility>,
-        DF: mzpeaks::prelude::FeatureLike<mzpeaks::Mass, mzpeaks::IonMobility> + mzpeaks::KnownCharge,
-    > = super::frame::Generic3DIonMobilityFrameSource<C, D, Self, CF, DF>;
-
-    fn has_ion_mobility(&mut self) -> Option<crate::spectrum::HasIonMobility> {
-        if self.buffer.is_empty() {
-            self.populate_buffer(5);
-        }
-
-        self.buffer
-            .iter()
-            .map(|s| s.has_ion_mobility_class())
-            .reduce(|a, b| a.max(b))
-    }
-
-    fn try_into_frame_source<
-        CF: mzpeaks::prelude::FeatureLike<mzpeaks::MZ, mzpeaks::IonMobility>,
-        DF: mzpeaks::prelude::FeatureLike<mzpeaks::Mass, mzpeaks::IonMobility> + mzpeaks::KnownCharge,
-    >(
-        mut self,
-    ) -> Result<Self::IonMobilityFrameSource<CF, DF>, super::IntoIonMobilityFrameSourceError> {
-        if let Some(state) = self.has_ion_mobility() {
-            if matches!(state, crate::spectrum::HasIonMobility::Dimension) {
-                Ok(Self::IonMobilityFrameSource::new(self))
-            } else {
-                Err(crate::io::IntoIonMobilityFrameSourceError::ConversionNotPossible)
+    /// [`StreamingSpectrumIterator`] implements [`RandomAccessSpectrumIterator`] in a limited fashion
+    /// by reading through successive spectra until the target spectrum is found. This will exhaust the
+    /// underlying iterator if the requested coordinate is not found.
+    impl<
+            C: CentroidLike,
+            D: DeconvolutedCentroidLike,
+            S: SpectrumLike<C, D>,
+            I: Iterator<Item = S>,
+        > RandomAccessSpectrumIterator<C, D, S> for StreamingSpectrumIterator<C, D, S, I>
+    {
+        fn start_from_id(&mut self, id: &str) -> Result<&mut Self, SpectrumAccessError> {
+            match self.get_spectrum_by_id(id) {
+                Some(s) => {
+                    self.push_front(s);
+                    Ok(self)
+                }
+                None => Err(SpectrumAccessError::SpectrumIdNotFound(id.to_string())),
             }
-        } else {
-            Err(crate::io::IntoIonMobilityFrameSourceError::NoIonMobilityFramesFound)
+        }
+
+        fn start_from_index(&mut self, index: usize) -> Result<&mut Self, SpectrumAccessError> {
+            match self.get_spectrum_by_index(index) {
+                Some(s) => {
+                    self.push_front(s);
+                    Ok(self)
+                }
+                None => Err(SpectrumAccessError::SpectrumIndexNotFound(index)),
+            }
+        }
+
+        fn start_from_time(&mut self, time: f64) -> Result<&mut Self, SpectrumAccessError> {
+            match self.get_spectrum_by_time(time) {
+                Some(s) => {
+                    self.push_front(s);
+                    Ok(self)
+                }
+                None => Err(SpectrumAccessError::SpectrumNotFound),
+            }
         }
     }
+
+    /// If the underlying iterator implements [`MSDataFileMetadata`] then [`StreamingSpectrumIterator`] will
+    /// forward that implementation, assuming it is available.
+    impl<
+            C: CentroidLike,
+            D: DeconvolutedCentroidLike,
+            S: SpectrumLike<C, D>,
+            I: Iterator<Item = S>,
+        > MSDataFileMetadata for StreamingSpectrumIterator<C, D, S, I>
+    where
+        I: MSDataFileMetadata,
+    {
+        crate::delegate_impl_metadata_trait!(source);
+    }
+
 }
 
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D>,
-        I: Iterator<Item = S>,
-    > StreamingSpectrumIterator<C, D, S, I>
-{
-    pub fn new(source: I) -> Self {
-        Self {
-            source,
-            buffer: VecDeque::new(),
-            _index: OffsetIndex::new("spectrum".to_string()),
-            _c: PhantomData,
-            _d: PhantomData,
-        }
-    }
+pub use norev::StreamingSpectrumIterator;
 
-    pub fn get_inner(&self) -> &I {
-        &self.source
-    }
+mod recv {
+    use super::*;
+    use std::sync::mpsc::Receiver;
 
-    pub fn get_mut(&mut self) -> &mut I {
-        &mut self.source
-    }
-
-    /// Get an immutable iterator over the pre-filled buffer.
+    /// An in-memory communication, non-rewindable channel carrying spectra
+    /// with associated metadata.
     ///
-    /// ## See also
-    /// [`StreamingSpectrumIterator::populate_buffer`]
-    pub fn iter_buffer(&self) -> std::collections::vec_deque::Iter<'_, S> {
-        self.buffer.iter()
-    }
-
-    /// Push a spectrum back into the stream in front of the buffer.
-    ///
-    /// ## Warning
-    /// If the spectrum is *not* from the undelying stream of spectra, then
-    /// any and all series metadata might be inconsistent.
-    fn push_front(&mut self, spectrum: S) {
-        self.buffer.push_front(spectrum);
-    }
-
-    /// Fill the buffer with at most `size` spectra
-    pub fn populate_buffer(&mut self, size: usize) {
-        for _ in 0..size {
-            if let Some(value) = self.source.next() {
-                self.buffer.push_back(value);
-            } else {
-                break;
-            }
-        }
-    }
-}
-
-/// [`StreamingSpectrumIterator`] implements [`RandomAccessSpectrumIterator`] in a limited fashion
-/// by reading through successive spectra until the target spectrum is found. This will exhaust the
-/// underlying iterator if the requested coordinate is not found.
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D>,
-        I: Iterator<Item = S>,
-    > RandomAccessSpectrumIterator<C, D, S> for StreamingSpectrumIterator<C, D, S, I>
-{
-    fn start_from_id(&mut self, id: &str) -> Result<&mut Self, SpectrumAccessError> {
-        match self.get_spectrum_by_id(id) {
-            Some(s) => {
-                self.push_front(s);
-                Ok(self)
-            }
-            None => Err(SpectrumAccessError::SpectrumIdNotFound(id.to_string())),
-        }
-    }
-
-    fn start_from_index(&mut self, index: usize) -> Result<&mut Self, SpectrumAccessError> {
-        match self.get_spectrum_by_index(index) {
-            Some(s) => {
-                self.push_front(s);
-                Ok(self)
-            }
-            None => Err(SpectrumAccessError::SpectrumIndexNotFound(index)),
-        }
-    }
-
-    fn start_from_time(&mut self, time: f64) -> Result<&mut Self, SpectrumAccessError> {
-        match self.get_spectrum_by_time(time) {
-            Some(s) => {
-                self.push_front(s);
-                Ok(self)
-            }
-            None => Err(SpectrumAccessError::SpectrumNotFound),
-        }
-    }
-}
-
-/// If the underlying iterator implements [`MSDataFileMetadata`] then [`StreamingSpectrumIterator`] will
-/// forward that implementation, assuming it is available.
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D>,
-        I: Iterator<Item = S>,
-    > MSDataFileMetadata for StreamingSpectrumIterator<C, D, S, I>
-where
-    I: MSDataFileMetadata,
-{
-    crate::delegate_impl_metadata_trait!(source);
-}
-
-/// An in-memory communication, non-rewindable channel carrying spectra
-/// with associated metadata.
-///
-/// This type is meant to be wrapped in a [`StreamingSpectrumIterator`] for
-/// compatibility with other interfaces.
-pub struct SpectrumReceiver<
-    C: CentroidLike + Send,
-    D: DeconvolutedCentroidLike + Send,
-    S: SpectrumLike<C, D> + Send,
-> {
-    receiver: Receiver<S>,
-
-    pub(crate) file_description: FileDescription,
-    /// A mapping of different instrument configurations (source, analyzer, detector) components
-    /// by ID string.
-    pub(crate) instrument_configurations: HashMap<u32, InstrumentConfiguration>,
-    /// The different software components that were involved in the processing and creation of this
-    /// file.
-    pub(crate) softwares: Vec<Software>,
-    pub(crate) samples: Vec<Sample>,
-    /// The data processing and signal transformation operations performed on the raw data in previous
-    /// source files to produce this file's contents.
-    pub(crate) data_processings: Vec<DataProcessing>,
-    // SpectrumList attributes
-    pub(crate) run: MassSpectrometryRun,
-    num_spectra: Option<u64>,
-    _c: PhantomData<C>,
-    _d: PhantomData<D>,
-}
-
-impl<
+    /// This type is meant to be wrapped in a [`StreamingSpectrumIterator`] for
+    /// compatibility with other interfaces.
+    pub struct SpectrumReceiver<
         C: CentroidLike + Send,
         D: DeconvolutedCentroidLike + Send,
         S: SpectrumLike<C, D> + Send,
-    > Iterator for SpectrumReceiver<C, D, S>
-{
-    type Item = S;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.receiver.recv() {
-            Ok(s) => Some(s),
-            Err(e) => {
-                log::warn!("Failed to receive spectrum: {}", e);
-                None
-            }
-        }
-    }
-}
-
-impl<
-        C: CentroidLike + Send,
-        D: DeconvolutedCentroidLike + Send,
-        S: SpectrumLike<C, D> + Send,
-    > From<Receiver<S>> for SpectrumReceiver<C, D, S>
-{
-    fn from(value: Receiver<S>) -> Self {
-        Self {
-            receiver: value,
-            file_description: Default::default(),
-            instrument_configurations: Default::default(),
-            softwares: Default::default(),
-            samples: Default::default(),
-            data_processings: Default::default(),
-            run: Default::default(),
-            num_spectra: Default::default(),
-            _c: PhantomData,
-            _d: PhantomData,
-        }
-    }
-}
-
-impl<
-        C: CentroidLike + Send,
-        D: DeconvolutedCentroidLike + Send,
-        S: SpectrumLike<C, D> + Send,
-    > MSDataFileMetadata for SpectrumReceiver<C, D, S>
-{
-    crate::impl_metadata_trait!();
-
-    fn spectrum_count_hint(&self) -> Option<u64> {
-        self.num_spectra
-    }
-
-    fn run_description(&self) -> Option<&MassSpectrometryRun> {
-        Some(&self.run)
-    }
-
-    fn run_description_mut(&mut self) -> Option<&mut MassSpectrometryRun> {
-        Some(&mut self.run)
-    }
-}
-
-impl<
-        C: CentroidLike + Send,
-        D: DeconvolutedCentroidLike + Send,
-        S: SpectrumLike<C, D> + Send,
-    > SpectrumReceiver<C, D, S>
-{
-    #[allow(unused, clippy::too_many_arguments)]
-    pub fn new(
+    > {
         receiver: Receiver<S>,
-        file_description: FileDescription,
-        instrument_configurations: HashMap<u32, InstrumentConfiguration>,
-        softwares: Vec<Software>,
-        samples: Vec<Sample>,
-        data_processings: Vec<DataProcessing>,
-        run: MassSpectrometryRun,
+
+        pub(crate) file_description: FileDescription,
+        /// A mapping of different instrument configurations (source, analyzer, detector) components
+        /// by ID string.
+        pub(crate) instrument_configurations: HashMap<u32, InstrumentConfiguration>,
+        /// The different software components that were involved in the processing and creation of this
+        /// file.
+        pub(crate) softwares: Vec<Software>,
+        pub(crate) samples: Vec<Sample>,
+        /// The data processing and signal transformation operations performed on the raw data in previous
+        /// source files to produce this file's contents.
+        pub(crate) data_processings: Vec<DataProcessing>,
+        // SpectrumList attributes
+        pub(crate) run: MassSpectrometryRun,
         num_spectra: Option<u64>,
-    ) -> Self {
-        Self {
-            receiver,
-            file_description,
-            instrument_configurations,
-            softwares,
-            samples,
-            data_processings,
-            run,
-            num_spectra,
-            _c: PhantomData,
-            _d: PhantomData,
+        _c: PhantomData<C>,
+        _d: PhantomData<D>,
+    }
+
+    impl<C: CentroidLike + Send, D: DeconvolutedCentroidLike + Send, S: SpectrumLike<C, D> + Send>
+        Iterator for SpectrumReceiver<C, D, S>
+    {
+        type Item = S;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self.receiver.recv() {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    log::warn!("Failed to receive spectrum: {}", e);
+                    None
+                }
+            }
+        }
+    }
+
+    impl<C: CentroidLike + Send, D: DeconvolutedCentroidLike + Send, S: SpectrumLike<C, D> + Send>
+        From<Receiver<S>> for SpectrumReceiver<C, D, S>
+    {
+        fn from(value: Receiver<S>) -> Self {
+            Self {
+                receiver: value,
+                file_description: Default::default(),
+                instrument_configurations: Default::default(),
+                softwares: Default::default(),
+                samples: Default::default(),
+                data_processings: Default::default(),
+                run: Default::default(),
+                num_spectra: Default::default(),
+                _c: PhantomData,
+                _d: PhantomData,
+            }
+        }
+    }
+
+    impl<C: CentroidLike + Send, D: DeconvolutedCentroidLike + Send, S: SpectrumLike<C, D> + Send>
+        MSDataFileMetadata for SpectrumReceiver<C, D, S>
+    {
+        crate::impl_metadata_trait!();
+
+        fn spectrum_count_hint(&self) -> Option<u64> {
+            self.num_spectra
+        }
+
+        fn run_description(&self) -> Option<&MassSpectrometryRun> {
+            Some(&self.run)
+        }
+
+        fn run_description_mut(&mut self) -> Option<&mut MassSpectrometryRun> {
+            Some(&mut self.run)
+        }
+    }
+
+    impl<C: CentroidLike + Send, D: DeconvolutedCentroidLike + Send, S: SpectrumLike<C, D> + Send>
+        SpectrumReceiver<C, D, S>
+    {
+        #[allow(unused, clippy::too_many_arguments)]
+        pub fn new(
+            receiver: Receiver<S>,
+            file_description: FileDescription,
+            instrument_configurations: HashMap<u32, InstrumentConfiguration>,
+            softwares: Vec<Software>,
+            samples: Vec<Sample>,
+            data_processings: Vec<DataProcessing>,
+            run: MassSpectrometryRun,
+            num_spectra: Option<u64>,
+        ) -> Self {
+            Self {
+                receiver,
+                file_description,
+                instrument_configurations,
+                softwares,
+                samples,
+                data_processings,
+                run,
+                num_spectra,
+                _c: PhantomData,
+                _d: PhantomData,
+            }
         }
     }
 }
+
+pub use recv::SpectrumReceiver;
 
 /// Analogous to to [`RandomAccessSpectrumIterator`], but for [`SpectrumGrouping`] implementations.
 pub trait RandomAccessSpectrumGroupingIterator<
@@ -968,160 +921,153 @@ pub trait RandomAccessSpectrumGroupingIterator<
     fn reset_state(&mut self);
 }
 
-/// A collection of spectra held in memory but providing an interface
-/// identical to a data file. This structure owns its data, so in order
-/// to yield ownership for [`SpectrumSource`], they are cloned.
-#[derive(Debug, Default)]
-pub struct MemorySpectrumSource<
-    C: CentroidLike = CentroidPeak,
-    D: DeconvolutedCentroidLike = DeconvolutedPeak,
-    S: SpectrumLike<C, D> = MultiLayerSpectrum<C, D>,
-> {
-    spectra: VecDeque<S>,
-    position: usize,
-    offsets: OffsetIndex,
-    _c: PhantomData<C>,
-    _d: PhantomData<D>,
-    metadata: FileMetadataConfig
-}
+mod memory {
+    use super::*;
 
-impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D>> MSDataFileMetadata for MemorySpectrumSource<C, D, S> {
-    crate::delegate_impl_metadata_trait!(expr, x => { &x.metadata }, &mut => { &mut x.metadata });
-}
-
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D> + Clone,
-    > MemorySpectrumSource<C, D, S>
-{
-    pub fn new(spectra: VecDeque<S>) -> Self {
-        Self::new_with_metadata(spectra, Default::default())
+    /// A collection of spectra held in memory but providing an interface
+    /// identical to a data file. This structure owns its data, so in order
+    /// to yield ownership for [`SpectrumSource`], they are cloned.
+    #[derive(Debug, Default)]
+    pub struct MemorySpectrumSource<
+        C: CentroidLike = CentroidPeak,
+        D: DeconvolutedCentroidLike = DeconvolutedPeak,
+        S: SpectrumLike<C, D> = MultiLayerSpectrum<C, D>,
+    > {
+        spectra: VecDeque<S>,
+        position: usize,
+        offsets: OffsetIndex,
+        _c: PhantomData<C>,
+        _d: PhantomData<D>,
+        metadata: FileMetadataConfig,
     }
 
-    pub fn new_with_metadata(spectra: VecDeque<S>, metadata: FileMetadataConfig) -> Self {
-        let mut offsets = OffsetIndex::new("spectrum".to_string());
-        spectra.iter().enumerate().for_each(|(i, s)| {
-            offsets.insert(s.id().to_string(), i as u64);
-        });
+    impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D>> MSDataFileMetadata
+        for MemorySpectrumSource<C, D, S>
+    {
+        crate::delegate_impl_metadata_trait!(expr, x => { &x.metadata }, &mut => { &mut x.metadata });
+    }
 
-        Self {
-            spectra,
-            position: 0,
-            offsets,
-            metadata,
-            _c: PhantomData,
-            _d: PhantomData,
+    impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone>
+        MemorySpectrumSource<C, D, S>
+    {
+        pub fn new(spectra: VecDeque<S>) -> Self {
+            Self::new_with_metadata(spectra, Default::default())
         }
-    }
-}
 
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D> + Clone,
-    > Iterator for MemorySpectrumSource<C, D, S>
-{
-    type Item = S;
+        pub fn new_with_metadata(spectra: VecDeque<S>, metadata: FileMetadataConfig) -> Self {
+            let mut offsets = OffsetIndex::new("spectrum".to_string());
+            spectra.iter().enumerate().for_each(|(i, s)| {
+                offsets.insert(s.id().to_string(), i as u64);
+            });
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.position < self.spectra.len() {
-            let idx = self.position;
-            self.position += 1;
-            let value = self.spectra.index(idx);
-            Some(value.clone())
-        } else {
-            None
-        }
-    }
-}
-
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D> + Clone,
-    > SpectrumSource<C, D, S> for MemorySpectrumSource<C, D, S>
-{
-    fn reset(&mut self) {
-        self.position = 0;
-    }
-
-    fn get_spectrum_by_id(&mut self, id: &str) -> Option<S> {
-        self.offsets.get(id).map(|i| {
-            let value = &self.spectra[i as usize];
-            value.clone()
-        })
-    }
-
-    fn get_spectrum_by_index(&mut self, index: usize) -> Option<S> {
-        if index < self.len() {
-            Some(self.spectra.index(index).clone())
-        } else {
-            None
-        }
-    }
-
-    fn get_index(&self) -> &OffsetIndex {
-        &self.offsets
-    }
-
-    fn set_index(&mut self, index: OffsetIndex) {
-        self.offsets = index
-    }
-
-    fn detail_level(&self) -> &DetailLevel {
-        &DetailLevel::Full
-    }
-
-    fn set_detail_level(&mut self, _detail_level: DetailLevel) {}
-}
-
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D> + Clone,
-    > RandomAccessSpectrumIterator<C, D, S> for MemorySpectrumSource<C, D, S>
-{
-    fn start_from_id(&mut self, id: &str) -> Result<&mut Self, SpectrumAccessError> {
-        match self.offsets.get(id) {
-            Some(offset) => {
-                self.position = offset as usize;
-                Ok(self)
+            Self {
+                spectra,
+                position: 0,
+                offsets,
+                metadata,
+                _c: PhantomData,
+                _d: PhantomData,
             }
-            None => Err(SpectrumAccessError::SpectrumNotFound),
         }
     }
 
-    fn start_from_index(&mut self, id: usize) -> Result<&mut Self, SpectrumAccessError> {
-        match self.offsets.get_index(id) {
-            Some((_, offset)) => {
-                self.position = offset as usize;
-                Ok(self)
+    impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone> Iterator
+        for MemorySpectrumSource<C, D, S>
+    {
+        type Item = S;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.position < self.spectra.len() {
+                let idx = self.position;
+                self.position += 1;
+                let value = self.spectra.index(idx);
+                Some(value.clone())
+            } else {
+                None
             }
-            None => Err(SpectrumAccessError::SpectrumNotFound),
         }
     }
 
-    fn start_from_time(&mut self, time: f64) -> Result<&mut Self, SpectrumAccessError> {
-        if let Some(scan) = self.get_spectrum_by_time(time) {
-            self.position = scan.index();
-            Ok(self)
-        } else {
-            Err(SpectrumAccessError::SpectrumNotFound)
+    impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone>
+        SpectrumSource<C, D, S> for MemorySpectrumSource<C, D, S>
+    {
+        fn reset(&mut self) {
+            self.position = 0;
+        }
+
+        fn get_spectrum_by_id(&mut self, id: &str) -> Option<S> {
+            self.offsets.get(id).map(|i| {
+                let value = &self.spectra[i as usize];
+                value.clone()
+            })
+        }
+
+        fn get_spectrum_by_index(&mut self, index: usize) -> Option<S> {
+            if index < self.len() {
+                Some(self.spectra.index(index).clone())
+            } else {
+                None
+            }
+        }
+
+        fn get_index(&self) -> &OffsetIndex {
+            &self.offsets
+        }
+
+        fn set_index(&mut self, index: OffsetIndex) {
+            self.offsets = index
+        }
+
+        fn detail_level(&self) -> &DetailLevel {
+            &DetailLevel::Full
+        }
+
+        fn set_detail_level(&mut self, _detail_level: DetailLevel) {}
+    }
+
+    impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone>
+        RandomAccessSpectrumIterator<C, D, S> for MemorySpectrumSource<C, D, S>
+    {
+        fn start_from_id(&mut self, id: &str) -> Result<&mut Self, SpectrumAccessError> {
+            match self.offsets.get(id) {
+                Some(offset) => {
+                    self.position = offset as usize;
+                    Ok(self)
+                }
+                None => Err(SpectrumAccessError::SpectrumNotFound),
+            }
+        }
+
+        fn start_from_index(&mut self, id: usize) -> Result<&mut Self, SpectrumAccessError> {
+            match self.offsets.get_index(id) {
+                Some((_, offset)) => {
+                    self.position = offset as usize;
+                    Ok(self)
+                }
+                None => Err(SpectrumAccessError::SpectrumNotFound),
+            }
+        }
+
+        fn start_from_time(&mut self, time: f64) -> Result<&mut Self, SpectrumAccessError> {
+            if let Some(scan) = self.get_spectrum_by_time(time) {
+                self.position = scan.index();
+                Ok(self)
+            } else {
+                Err(SpectrumAccessError::SpectrumNotFound)
+            }
+        }
+    }
+
+    impl<C: CentroidLike, D: DeconvolutedCentroidLike, S: SpectrumLike<C, D> + Clone> From<VecDeque<S>>
+        for MemorySpectrumSource<C, D, S>
+    {
+        fn from(value: VecDeque<S>) -> Self {
+            Self::new(value)
         }
     }
 }
 
-impl<
-        C: CentroidLike,
-        D: DeconvolutedCentroidLike,
-        S: SpectrumLike<C, D> + Clone,
-    > From<VecDeque<S>> for MemorySpectrumSource<C, D, S>
-{
-    fn from(value: VecDeque<S>) -> Self {
-        Self::new(value)
-    }
-}
+pub use memory::MemorySpectrumSource;
 
 /// Common interface for spectrum writing
 pub trait SpectrumWriter<
@@ -1278,8 +1224,7 @@ mod async_traits {
         fn get_spectrum_by_id(&mut self, id: &str) -> impl Future<Output = Option<S>>;
 
         /// Retrieve a spectrum by it's integer index
-        fn get_spectrum_by_index(&mut self, index: usize)
-            -> impl Future<Output = Option<S>>;
+        fn get_spectrum_by_index(&mut self, index: usize) -> impl Future<Output = Option<S>>;
 
         /// Retrieve a spectrum by its scan start time
         /// Considerably more complex than seeking by ID or index, this involves
@@ -1373,7 +1318,11 @@ mod async_traits {
 
         fn read_next(&mut self) -> impl Future<Output = Option<S>>;
 
-        fn as_stream(&mut self) -> impl SpectrumStream<C, D, S> + '_ {
+        /// Wrap this source in a [`Stream`] over its spectra
+        ///
+        /// The returned stream is [`Unpin`], so it can be driven directly with
+        /// [`StreamExt::next`](futures::StreamExt::next) without pinning it first.
+        fn as_stream(&mut self) -> impl SpectrumStream<C, D, S> + Unpin + '_ {
             Box::pin(stream::unfold(self, |reader| async {
                 let spec = reader.read_next();
                 spec.await.map(|val| (val, reader))
@@ -1400,6 +1349,8 @@ mod async_traits {
             time: f64,
         ) -> impl Future<Output = Result<&mut Self, SpectrumAccessError>>;
     }
+
+
 
     #[cfg(feature = "async")]
     pub trait AsyncMZFileReader<
@@ -1473,3 +1424,206 @@ pub use async_traits::{AsyncRandomAccessSpectrumIterator, AsyncSpectrumSource, S
 
 #[cfg(feature = "async")]
 pub use async_traits::AsyncMZFileReader;
+
+
+
+#[cfg(feature = "mzsignal")]
+mod peak_picking {
+    use super::*;
+
+    use mzdata_bindata::BuildFromArrayMap;
+    use mzdata_spectrum::MultiLayerSpectrum;
+    use std::marker::PhantomData;
+
+    /// A wrapper around [`SpectrumSource`] that picks peaks from
+    /// the profile spectra and materializes peak lists.
+    pub struct PeakPicking<
+        R: SpectrumSource<C, D>,
+        C: CentroidLike + From<mzsignal::FittedPeak>,
+        D: DeconvolutedCentroidLike,
+    > {
+        inner: R,
+        ms_level_to_signal_to_noise_filter: Vec<Option<f32>>,
+        _t: PhantomData<(C, D)>,
+    }
+
+    impl<
+            R: SpectrumSource<C, D>,
+            C: CentroidLike + From<mzsignal::FittedPeak> + BuildFromArrayMap,
+            D: DeconvolutedCentroidLike + BuildFromArrayMap,
+        > RandomAccessSpectrumIterator<C, D> for PeakPicking<R, C, D>
+    where
+        R: RandomAccessSpectrumIterator<C, D>,
+    {
+        fn start_from_id(&mut self, id: &str) -> Result<&mut Self, SpectrumAccessError> {
+            self.inner.start_from_id(id)?;
+            Ok(self)
+        }
+
+        fn start_from_index(&mut self, index: usize) -> Result<&mut Self, SpectrumAccessError> {
+            self.inner.start_from_index(index)?;
+            Ok(self)
+        }
+
+        fn start_from_time(&mut self, time: f64) -> Result<&mut Self, SpectrumAccessError> {
+            self.inner.start_from_time(time)?;
+            Ok(self)
+        }
+    }
+
+    impl<
+            R: SpectrumSource<C, D>,
+            C: CentroidLike + From<mzsignal::FittedPeak> + BuildFromArrayMap,
+            D: DeconvolutedCentroidLike + BuildFromArrayMap,
+        > MSDataFileMetadata for PeakPicking<R, C, D>
+    where
+        R: MSDataFileMetadata,
+    {
+        mzdata_meta::delegate_impl_metadata_trait!(inner);
+    }
+
+    impl<
+            R: SpectrumSource<C, D>,
+            C: CentroidLike + From<mzsignal::FittedPeak> + BuildFromArrayMap,
+            D: DeconvolutedCentroidLike + BuildFromArrayMap,
+        > Iterator for PeakPicking<R, C, D>
+    {
+        type Item = MultiLayerSpectrum<C, D>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let mut s = self.inner.next()?;
+            self.pick_peaks(&mut s);
+            Some(s)
+        }
+    }
+
+    impl<
+            R: SpectrumSource<C, D>,
+            C: CentroidLike + BuildFromArrayMap + From<mzsignal::FittedPeak>,
+            D: DeconvolutedCentroidLike + BuildFromArrayMap,
+        > SpectrumSource<C, D> for PeakPicking<R, C, D>
+    {
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+
+        fn detail_level(&self) -> &crate::io::DetailLevel {
+            self.inner.detail_level()
+        }
+
+        fn set_detail_level(&mut self, detail_level: crate::io::DetailLevel) {
+            self.inner.set_detail_level(detail_level);
+        }
+
+        fn get_spectrum_by_id(&mut self, id: &str) -> Option<MultiLayerSpectrum<C, D>> {
+            let mut s = self.inner.get_spectrum_by_id(id)?;
+            self.pick_peaks(&mut s);
+            Some(s)
+        }
+
+        fn get_spectrum_by_index(&mut self, index: usize) -> Option<MultiLayerSpectrum<C, D>> {
+            let mut s = self.inner.get_spectrum_by_index(index)?;
+            self.pick_peaks(&mut s);
+            Some(s)
+        }
+
+        fn get_spectrum_by_time(&mut self, time: f64) -> Option<MultiLayerSpectrum<C, D>> {
+            let mut s = self.inner.get_spectrum_by_time(time)?;
+            self.pick_peaks(&mut s);
+            Some(s)
+        }
+
+        fn get_index(&self) -> &crate::io::OffsetIndex {
+            self.inner.get_index()
+        }
+
+        fn set_index(&mut self, index: crate::io::OffsetIndex) {
+            self.inner.set_index(index);
+        }
+    }
+
+    impl<
+            R: SpectrumSource<C, D>,
+            C: CentroidLike + BuildFromArrayMap + From<mzsignal::FittedPeak>,
+            D: DeconvolutedCentroidLike + BuildFromArrayMap,
+        > PeakPicking<R, C, D>
+    {
+        /// Create a new [`PeakPicking`] with a single signal to noise threshold for all spectra
+        pub fn new(inner: R, signal_to_noise_threshold: f32) -> Self {
+            Self {
+                inner,
+                _t: PhantomData,
+                ms_level_to_signal_to_noise_filter: vec![Some(signal_to_noise_threshold)],
+            }
+        }
+
+        /// Create a new [`PeakPicking`] with a per MS-level signal to noise threshold for all spectra
+        pub fn new_with_per_ms_level_signal_to_noise_threshold(inner: R, mut signal_to_noise_threshold: Vec<Option<f32>>) -> Self {
+            if signal_to_noise_threshold.is_empty() {
+                log::warn!("Per MS level signal to noise threshold array is empty, defaulting to a threshold of 1.5 for all levels");
+                signal_to_noise_threshold = vec![Some(1.5)];
+            }
+            Self {
+                inner,
+                _t: PhantomData,
+                ms_level_to_signal_to_noise_filter: signal_to_noise_threshold
+            }
+        }
+
+        /// Pick peaks for a specific spectrum if it can have peaks picked, and the MS level
+        /// is configured or the default parameters are set.
+        ///
+        /// Returns `true` if peaks were picked, `false` otherwise.
+        pub fn pick_peaks(&self, spectrum: &mut MultiLayerSpectrum<C, D>) -> bool {
+            let needs_picking = if spectrum.signal_continuity().is_centroid() {
+                MultiLayerSpectrum::try_build_peaks(spectrum).is_err()
+            } else {
+                spectrum.signal_continuity().is_profile()
+            };
+            if needs_picking {
+                let snr_threshold = self
+                    .ms_level_to_signal_to_noise_filter
+                    .get(spectrum.ms_level() as usize)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        self.ms_level_to_signal_to_noise_filter
+                            .first()
+                            .copied()
+                            .unwrap_or_default()
+                    });
+                if let Some(snr_threshold) = snr_threshold {
+                    MultiLayerSpectrum::pick_peaks(
+                        spectrum,
+                        snr_threshold).is_ok()
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+
+        /// Get an immutable reference to the inner instance `R`
+        pub fn get_ref(&self) -> &R {
+            &self.inner
+        }
+
+        /// Get an mutable reference to the inner instance `R`
+        pub fn get_mut(&mut self) -> &mut R {
+            &mut self.inner
+        }
+
+        /// Consume the [`PeakPicking`] instance, retrieving the original `R` instance
+        pub fn into_inner(self) -> R {
+            self.inner
+        }
+
+        /// Get an immutable view of the signal to noise thresholds
+        pub fn ms_level_to_signal_to_noise_filter(&self) -> &[Option<f32>] {
+            &self.ms_level_to_signal_to_noise_filter
+        }
+    }
+}
+
+#[cfg(feature = "mzsignal")]
+pub use peak_picking::PeakPicking;

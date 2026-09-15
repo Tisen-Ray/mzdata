@@ -32,7 +32,7 @@ use crate::{
         bindata::{ArrayRetrievalError, BinaryArrayMap3D},
         Activation, ArrayType, BinaryArrayMap, BinaryDataArrayType, Chromatogram,
         ChromatogramDescription, ChromatogramType, DataArray, IonMobilityFrameDescription,
-        IsolationWindow, IsolationWindowState, MultiLayerIonMobilityFrame, MultiLayerSpectrum,
+        IsolationWindow, MultiLayerIonMobilityFrame, MultiLayerSpectrum,
         Precursor, ScanCombination, ScanEvent, ScanWindow, SelectedIon, SignalContinuity,
     },
     Param,
@@ -46,9 +46,9 @@ use timsrust::{
     Metadata, TimsRustError,
 };
 
-pub use super::arrays::FrameToArraysMapper;
 use super::{
-    arrays::consolidate_peaks,
+    arrays::{consolidate_peaks, FrameToArraysMapper},
+    calibration::{CalibrationParameters, MzCalibrationModel, TimsCalibrationModel},
     constants::{InstrumentSource, MsMsType},
     sql::{
         ChromatographyData, FromSQL, PasefPrecursor, RawTDFSQLReader, SQLDIAFrameMsMsWindow,
@@ -181,6 +181,7 @@ pub struct TDFFrameReaderType<
     entry_index: Vec<IndexExtry>,
     index: usize,
     offset_index: OffsetIndex,
+    calibration_models: CalibrationParameters,
     /// The description of the file's contents and the previous data files that were
     /// consumed to produce it.
     pub(crate) file_description: FileDescription,
@@ -216,6 +217,66 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         Self::new_with_detail_level(path, DetailLevel::Full)
     }
 
+    /// Get the models used to recalibrate the m/z and ion mobility for the frame at `index`.
+    ///
+    /// If the models cannot be resolved, either because one is not found or is not supported,
+    /// the most basic interpolation models will be used instead.
+    pub fn calibration_models_for(
+        &self,
+        index: usize,
+    ) -> (MzCalibrationModel, TimsCalibrationModel) {
+        if let Some(entry) = self.entry_index.get(index) {
+            let mz_model: MzCalibrationModel = self
+                .calibration_models
+                .find_mz_model_for_frame(&entry.frame)
+                .unwrap_or_else(|_e| self.calibration_models.basic_mz_model.into());
+            let im_model: TimsCalibrationModel = self
+                .calibration_models
+                .find_tims_model_for_frame(&entry.frame)
+                .unwrap_or_else(|_e| self.calibration_models.basic_im_model.into());
+            (mz_model, im_model)
+        } else {
+            (
+                self.calibration_models.basic_mz_model.into(),
+                self.calibration_models.basic_im_model.into(),
+            )
+        }
+    }
+
+    /// Get the model parameters as [`Param`]s used to recalibrate the m/z and ion mobility
+    /// for the frame at `index`.
+    ///
+    /// If the models cannot be resolved, either because one is not found or is not supported,
+    /// the most basic interpolation models will be used instead.
+    pub fn calibration_parameters_for(&self, index: usize) -> (Param, Param) {
+        if let Some(entry) = self.entry_index.get(index) {
+            let mz_model = match self
+                .calibration_models
+                .find_mz_model_for_frame(&entry.frame)
+            {
+                Ok(val) => val
+                    .as_param()
+                    .unwrap_or_else(|| self.calibration_models.basic_mz_parameters()),
+                Err(_e) => self.calibration_models.basic_mz_parameters(),
+            };
+            let im_model = match self
+                .calibration_models
+                .find_tims_model_for_frame(&entry.frame)
+            {
+                Ok(val) => val
+                    .as_param()
+                    .unwrap_or_else(|| self.calibration_models.basic_tims_parameters()),
+                Err(_e) => self.calibration_models.basic_tims_parameters(),
+            };
+            (mz_model, im_model)
+        } else {
+            (
+                self.calibration_models.basic_mz_parameters(),
+                self.calibration_models.basic_tims_parameters(),
+            )
+        }
+    }
+
     /// Construct a new reader from the specified file system path with the specified
     /// [`DetailLevel`].
     ///
@@ -239,6 +300,16 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         let tdf_reader = RawTDFSQLReader::new(&tdf_path)
             .map_err(|e| TimsRustError::FrameReaderError(FrameReaderError::SqlError(e.into())))?;
 
+        let calibration_models =
+            CalibrationParameters::from_sql(&tdf_reader.connection(), &metadata)
+                .inspect_err(|e| {
+                    log::error!("Failed to load calibration from {}: {e}", path.display())
+                })
+                .unwrap_or_default();
+
+        // The m/z models aren't consistently good enough, or at least my translations aren't
+        // calibration_models.mz_enabled = false;
+
         let mut this = Self {
             metadata,
             frame_reader,
@@ -246,7 +317,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
             entry_index: Vec::new(),
             index: 0,
             offset_index: OffsetIndex::new("spectrum".into()),
-
+            calibration_models,
             instrument_configurations: HashMap::default(),
             file_description: FileDescription::default(),
             softwares: Vec::new(),
@@ -612,19 +683,34 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                         "Extracting {index} as PasefFrameMsMs with range {:?}",
                         pasef.scan_start..pasef.scan_end
                     );
-                    let arrays = FrameToArraysMapper::new(&frame, &self.metadata)
-                        .process_3d_slice(pasef.scan_start..pasef.scan_end);
+                    let arrays = FrameToArraysMapper::new(
+                        &frame,
+                        &self.calibration_models,
+                        &entry.frame,
+                    )
+                    .process_3d_slice(pasef.scan_start..pasef.scan_end);
                     Some(arrays)
                 } else if let Some(dia_pasef) = entry.dia_window() {
                     log::trace!(
                         "Extracting {index} as DIAFrameMsMsWindow with range {:?}",
                         dia_pasef.scan_start..dia_pasef.scan_end
                     );
-                    let arrays = FrameToArraysMapper::new(&frame, &self.metadata)
-                        .process_3d_slice(dia_pasef.scan_start..dia_pasef.scan_end);
+                    let arrays = FrameToArraysMapper::new(
+                        &frame,
+                        &self.calibration_models,
+                        &entry.frame,
+                    )
+                    .process_3d_slice(dia_pasef.scan_start..dia_pasef.scan_end);
                     Some(arrays)
                 } else {
-                    Some(FrameToArraysMapper::new(&frame, &self.metadata).process_3d_slice(..))
+                    Some(
+                        FrameToArraysMapper::new(
+                            &frame,
+                            &self.calibration_models,
+                            &entry.frame,
+                        )
+                        .process_3d_slice(..),
+                    )
                 }
             } else {
                 None
@@ -657,11 +743,16 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         queries: &[EICQuery],
     ) -> Result<Vec<PreparedTDFEICQuery>, EICError> {
         let prepared = prepare_queries(queries)?;
+        // The basic models only seed coarse TOF/scan bounds (widened by
+        // floor/ceil below); the exact per-frame calibration is applied
+        // during extraction via `calibration_models_for`.
+        let mz_model: MzCalibrationModel = self.calibration_models.basic_mz_model.into();
+        let im_model: TimsCalibrationModel = self.calibration_models.basic_im_model.into();
         prepared
             .into_iter()
             .map(|query| {
-                let tof_lo = self.metadata.mz_converter.invert(query.mz_min).floor();
-                let tof_hi = self.metadata.mz_converter.invert(query.mz_max).ceil();
+                let tof_lo = mz_model.invert(query.mz_min).floor();
+                let tof_hi = mz_model.invert(query.mz_max).ceil();
                 let (tof_min, tof_max) = if tof_lo <= tof_hi {
                     (tof_lo, tof_hi)
                 } else {
@@ -673,8 +764,8 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                 let (scan_start, scan_end) = if let (Some(mobility_min), Some(mobility_max)) =
                     (query.mobility_min, query.mobility_max)
                 {
-                    let scan_lo = self.metadata.im_converter.invert(mobility_min);
-                    let scan_hi = self.metadata.im_converter.invert(mobility_max);
+                    let scan_lo = im_model.invert(mobility_min);
+                    let scan_hi = im_model.invert(mobility_max);
                     let scan_start = scan_lo.min(scan_hi).floor().max(0.0) as usize;
                     let scan_end = scan_lo.max(scan_hi).ceil().max(0.0) as usize + 1;
                     (Some(scan_start), Some(scan_end))
@@ -713,7 +804,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         let base_queries: Vec<_> = prepared.iter().map(|query| query.base.clone()).collect();
         let mut results = initialize_results(&base_queries);
 
-        let mut frame_cache: Option<(usize, timsrust::Frame)> = None;
+        let mut frame_cache: Option<(usize, timsrust::Frame, MzCalibrationModel)> = None;
         let total = self.entry_index.len();
         for (entry_index, entry) in self.entry_index.iter().enumerate() {
             let time = entry.frame.time / 60.0;
@@ -738,20 +829,22 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
 
             let needs_refresh = frame_cache
                 .as_ref()
-                .map(|(frame_id, _)| *frame_id != entry.frame.id)
+                .map(|(frame_id, _, _)| *frame_id != entry.frame.id)
                 .unwrap_or(true);
             if needs_refresh {
                 let frame = self
                     .frame_reader
                     .get(entry.frame.id.saturating_sub(1))
                     .map_err(timsrust::TimsRustError::from)?;
-                frame_cache = Some((entry.frame.id, frame));
+                let (mz_model, _im_model) = self.calibration_models_for(entry_index);
+                frame_cache = Some((entry.frame.id, frame, mz_model));
             }
 
-            let frame = &frame_cache
+            let cache = frame_cache
                 .as_ref()
-                .expect("frame cache should be populated")
-                .1;
+                .expect("frame cache should be populated");
+            let frame = &cache.1;
+            let mz_model = &cache.2;
             let total_scans = frame.scan_offsets.len().saturating_sub(1);
             let (entry_scan_start, entry_scan_end) = entry.scan_range();
 
@@ -771,7 +864,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                 let intensity = if scan_start >= scan_end {
                     0.0
                 } else {
-                    sum_tdf_query(frame, &self.metadata, query, scan_start, scan_end)
+                    sum_tdf_query(frame, mz_model, query, scan_start, scan_end)
                 };
                 results[query_index].times.push(time);
                 results[query_index].intensities.push(intensity);
@@ -788,11 +881,23 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
 
         Ok(results)
     }
+
+    /// Get immutable access to the collection of calibration models for m/z and ion mobility
+    pub fn calibration_models(&self) -> &CalibrationParameters {
+        &self.calibration_models
+    }
+
+    /// Get mutable access to the collection of calibration models for m/z and ion mobility.
+    /// Care *MUST* be taken when configuring these to be consistent with the inferred Bruker
+    /// models' equations.
+    pub fn calibration_models_mut(&mut self) -> &mut CalibrationParameters {
+        &mut self.calibration_models
+    }
 }
 
 fn sum_tdf_query(
     frame: &timsrust::Frame,
-    metadata: &Metadata,
+    mz_model: &MzCalibrationModel,
     query: &PreparedTDFEICQuery,
     scan_start: usize,
     scan_end: usize,
@@ -814,7 +919,7 @@ fn sum_tdf_query(
             .copied()
             .zip(intensity_slice[lower..upper].iter().copied())
             .filter_map(|(tof, intensity)| {
-                let mz = metadata.mz_converter.convert(tof);
+                let mz = mz_model.convert(tof);
                 let intensity = intensity as f32;
                 (mz >= query.base.mz_min
                     && mz <= query.base.mz_max
@@ -1250,13 +1355,13 @@ impl<
     ) -> Result<Self::IonMobilityFrameSource<CF, DF>, crate::io::IntoIonMobilityFrameSourceError>
     {
         let view = self.into_frame_reader();
-
         Ok(TDFFrameReaderType {
             tdf_reader: view.tdf_reader,
             metadata: view.metadata,
             frame_reader: view.frame_reader,
             entry_index: view.entry_index,
             index: view.index,
+            calibration_models: view.calibration_models,
             offset_index: view.offset_index,
             file_description: view.file_description,
             instrument_configurations: view.instrument_configurations,
@@ -1594,6 +1699,19 @@ impl<
     pub fn set_consolidate_peaks(&mut self, do_consolidate_peaks: bool) {
         self.do_consolidate_peaks = do_consolidate_peaks;
     }
+
+    /// See [`TDFFrameReaderType::calibration_models_for`]
+    pub fn calibration_models_for(
+            &self,
+            index: usize,
+        ) -> (MzCalibrationModel, TimsCalibrationModel) {
+        self.frame_reader.calibration_models_for(index)
+    }
+
+    /// See [`TDFFrameReaderType::calibration_parameters_for`]
+    pub fn calibration_parameters_for(&self, index: usize) -> (Param, Param) {
+        self.frame_reader.calibration_parameters_for(index)
+    }
 }
 
 pub type TDFSpectrumReader = TDFSpectrumReaderType<
@@ -1631,20 +1749,14 @@ fn index_to_precursor(
             act.methods_mut().push(CollisionInducedDissociation);
 
             let iso_width = pasef.isolation_width / 2.0;
-            isolation.target = pasef.isolation_mz as f32;
-            isolation.lower_bound = (pasef.isolation_mz - iso_width) as f32;
-            isolation.upper_bound = (pasef.isolation_mz + iso_width) as f32;
-            isolation.flags = IsolationWindowState::Complete;
+            isolation = IsolationWindow::around(pasef.isolation_mz as f32, iso_width as f32);
         }
         if let Some(pasef) = index_entry.dia_window() {
             act.energy = pasef.collision_energy;
             act.methods_mut().push(CollisionInducedDissociation);
 
             let iso_width = pasef.isolation_width / 2.0;
-            isolation.target = pasef.isolation_mz as f32;
-            isolation.lower_bound = (pasef.isolation_mz - iso_width) as f32;
-            isolation.upper_bound = (pasef.isolation_mz + iso_width) as f32;
-            isolation.flags = IsolationWindowState::Complete;
+            isolation = IsolationWindow::around(pasef.isolation_mz as f32, iso_width as f32);
         }
 
         let mut mz_prec = Precursor::default();
@@ -1673,20 +1785,14 @@ fn index_to_precursor(
             act.methods_mut().push(CollisionInducedDissociation);
 
             let iso_width = pasef.isolation_width / 2.0;
-            isolation.target = pasef.isolation_mz as f32;
-            isolation.lower_bound = (pasef.isolation_mz - iso_width) as f32;
-            isolation.upper_bound = (pasef.isolation_mz + iso_width) as f32;
-            isolation.flags = IsolationWindowState::Complete;
+            isolation = IsolationWindow::around(pasef.isolation_mz as f32, iso_width as f32);
         }
         if let Some(pasef) = index_entry.dia_window() {
             act.energy = pasef.collision_energy;
             act.methods_mut().push(CollisionInducedDissociation);
 
             let iso_width = pasef.isolation_width / 2.0;
-            isolation.target = pasef.isolation_mz as f32;
-            isolation.lower_bound = (pasef.isolation_mz - iso_width) as f32;
-            isolation.upper_bound = (pasef.isolation_mz + iso_width) as f32;
-            isolation.flags = IsolationWindowState::Complete;
+            isolation = IsolationWindow::around(pasef.isolation_mz as f32, iso_width as f32);
         }
         let mut mz_prec = Precursor::default();
         mz_prec.add_ion(ion);
@@ -1864,6 +1970,8 @@ pub fn is_tdf<P: AsRef<Path>>(path: P) -> bool {
 
 #[cfg(test)]
 mod test {
+    use crate::MZReader;
+
     use super::*;
 
     #[test]
@@ -1947,7 +2055,7 @@ mod test {
     fn test_tdf_spectrum() -> io::Result<()> {
         let mut reader = TDFSpectrumReader::open_path("test/data/diaPASEF.d")?;
         reader.set_consolidate_peaks(true);
-        eprintln!("{}", reader.len());
+        assert_eq!(reader.len(), 9);
         let s = reader.get_spectrum_by_index(0).unwrap();
         assert!(s.peaks.is_some());
         assert_eq!(s.signal_continuity(), SignalContinuity::Centroid);
@@ -1956,10 +2064,81 @@ mod test {
     }
 
     #[test]
+    fn test_tdf_frame_parity() -> io::Result<()> {
+        let mut reader = TDFFrameReader::new("test/data/diaPASEF.d")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let mut ref_reader = MZReader::open_path("test/data/diaPASEF.mzML")?
+            .into_frame_source::<Feature<MZ, IonMobility>, ChargedFeature<Mass, IonMobility>>();
+
+        for (frame, ref_frame) in reader.iter().zip(ref_reader.iter()) {
+            let arrays = frame.raw_arrays().unwrap().unstack().unwrap();
+            let ref_arrays = ref_frame.raw_arrays().unwrap().unstack().unwrap();
+
+            let arrays_3d = frame.raw_arrays().unwrap();
+            let ref_arrays_3d = ref_frame.raw_arrays().unwrap();
+
+            let it_arrays_3d_im = arrays_3d
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, v))| v.mzs().map(|v| v.len()).unwrap_or_default() > 0)
+                .map(|(i, (a, _))| (i, a));
+            let it_arrays_3d_im_ref = ref_arrays_3d
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, v))| v.mzs().map(|v| v.len()).unwrap_or_default() > 0)
+                .map(|(i, (a, _))| (i, a));
+
+            for (_i, ((ai, a), (bi, b))) in it_arrays_3d_im.zip(it_arrays_3d_im_ref).enumerate() {
+                let e = (a - b).abs();
+                let arrays_at = &arrays_3d.arrays[ai];
+                let ref_arrays_at = &ref_arrays_3d.arrays[bi];
+                // eprintln!("ion mobility axis {a} - {b} = {e} at index {i} ({ai} with {:?} vs {bi} {:?})", arrays_at.mzs(), ref_arrays_at.mzs());
+                assert_eq!(
+                    arrays_at.mzs().map(|v| v.len()).unwrap_or_default(),
+                    ref_arrays_at.mzs().map(|v| v.len()).unwrap_or_default()
+                );
+                // Track that the interpolation error is
+                assert!(e < 1.0);
+                // assert!(e < 1.5e-3, "ion mobility axis {a} - {b} = {e} at index {i} ({ai} with {:?} vs {bi} {:?})", arrays_at.mzs(), ref_arrays_at.mzs())
+                let mzs_at = arrays_at.mzs().unwrap();
+                let ref_mzs = ref_arrays_at.mzs().unwrap();
+                let mut acc = 0.0;
+                for (j, (ma, mb)) in mzs_at
+                    .iter()
+                    .copied()
+                    .zip(ref_mzs.iter().copied())
+                    .enumerate()
+                {
+                    let e = (ma - mb).abs();
+                    assert!(
+                        e < 0.1,
+                        "{ma} - {mb} err {e} too large at position {j} in slot {_i}"
+                    );
+                    acc += e;
+                }
+                acc /= mzs_at.len() as f64;
+                assert!(acc < 0.1);
+            }
+
+            let (im, _) = arrays.ion_mobility().unwrap();
+            let (im_ref, _) = ref_arrays.ion_mobility().unwrap();
+            assert_eq!(im.len(), im_ref.len());
+            // for (i, (a, b)) in im.iter().zip(im_ref.iter()).enumerate() {
+            //     let e = (a - b).abs();
+            //     assert!(e < 1e-3, "ion mobility point {a} - {b} = {e} at index {i}")
+            // }
+        }
+        Ok(())
+    }
+
+    #[test_log::test]
     fn test_tdf_frame() -> io::Result<()> {
         let mut reader = TDFFrameReader::new("test/data/diaPASEF.d")
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        eprintln!("{}", reader.len());
+
+        assert_eq!(reader.calibration_models.mz.len(), 2);
+        assert_eq!(reader.calibration_models.tims.len(), 1);
+
         let s = reader.get_frame_by_index(0).unwrap();
         assert!(s.features.is_none());
         assert_eq!(s.signal_continuity(), SignalContinuity::Centroid);
@@ -1969,6 +2148,43 @@ mod test {
         assert!(s.features.is_none());
         assert_eq!(s.signal_continuity(), SignalContinuity::Centroid);
         assert_eq!(s.ms_level(), 2);
+
+        // SQL: "SELECT NumPeaks FROM Frames;"
+        let mut expected_peak_counts = vec![205921usize, 9365, 10566, 10908, 54771];
+        let original_peak_counts = expected_peak_counts.clone();
+
+        for frame in reader.iter() {
+            let frame_idx = frame
+                .id()
+                .split(" ")
+                .skip(1)
+                .next()
+                .unwrap()
+                .split_once("=")
+                .unwrap()
+                .1
+                .parse::<usize>()
+                .unwrap()
+                - 1;
+
+            let vals = frame.raw_arrays().unwrap();
+            let vals_flat = vals.unstack().unwrap();
+            let n_flat = vals_flat.mzs().unwrap().len();
+            let n_stacked = vals
+                .arrays
+                .iter()
+                .map(|v| v.mzs().map(|v| v.len()).unwrap_or_default())
+                .sum::<usize>();
+            assert_eq!(n_flat, n_stacked);
+
+            // Assumes non-overlapping PASEF frames
+            assert!(
+                n_flat <= expected_peak_counts[frame_idx],
+                "Failed to count peaks properly: {} peaks out of {} remaining, claiming {n_flat} more",
+                expected_peak_counts[frame_idx], original_peak_counts[frame_idx]
+            );
+            expected_peak_counts[frame_idx] = expected_peak_counts[frame_idx] - n_flat;
+        }
         Ok(())
     }
 }

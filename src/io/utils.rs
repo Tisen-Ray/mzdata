@@ -4,24 +4,13 @@ use std::fs;
 use std::io;
 #[allow(unused)]
 use std::io::prelude::*;
-use std::path;
 #[allow(unused)]
 use std::path::PathBuf;
 
 #[cfg(feature = "checksum")]
-use md5::{Context as MD5Context, Digest};
-#[cfg(feature = "checksum")]
 use sha1::{self, Digest as _};
 
 type ByteBuffer = io::Cursor<Vec<u8>>;
-
-#[derive(Debug, Clone, Default)]
-pub enum FileWrapper<T: io::Read> {
-    FileSystem(path::PathBuf),
-    Stream(T),
-    #[default]
-    Empty,
-}
 
 /// Controls the level of spectral detail read from an MS data file
 #[derive(Debug, Default, Clone, Copy, Hash, PartialEq, Eq)]
@@ -36,80 +25,6 @@ pub enum DetailLevel {
     Lazy,
     /// Read only the metadata of spectra, ignoring peak data entirely
     MetadataOnly,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct FileSource<T: io::Read> {
-    pub source: FileWrapper<T>,
-}
-
-// This really should be a full file-like object abstraction, but that
-// feels like it is beyond the scope of this crate. Something like
-// https://github.com/bnjjj/chicon-rs
-impl<T: io::Read> FileSource<T> {
-    pub fn from_path<P>(path: P) -> FileSource<T>
-    where
-        P: Into<path::PathBuf>,
-    {
-        FileSource {
-            source: FileWrapper::FileSystem(path.into()),
-        }
-    }
-
-    pub fn from_stream(stream: T) -> FileSource<T> {
-        FileSource {
-            source: FileWrapper::Stream(stream),
-        }
-    }
-
-    pub fn file_name(&self) -> Option<&path::Path> {
-        match &self.source {
-            FileWrapper::FileSystem(path) => Some(path),
-            FileWrapper::Stream(_stream) => None,
-            FileWrapper::Empty => None,
-        }
-    }
-
-    pub fn index_file_name(&self) -> Option<path::PathBuf> {
-        match &self.source {
-            FileWrapper::Empty => None,
-            FileWrapper::Stream(_stream) => None,
-            FileWrapper::FileSystem(path) => {
-                if let Some(stem) = path.file_name() {
-                    if let Some(parent) = path.parent() {
-                        let base = parent.join(stem);
-                        let name = base.with_extension("index.json");
-                        return Some(name);
-                    }
-                }
-                None
-            }
-        }
-    }
-
-    pub fn has_index_file(&self) -> bool {
-        match self.index_file_name() {
-            Some(path) => path.exists(),
-            None => false,
-        }
-    }
-}
-
-pub fn from_path<P>(path: P) -> FileSource<fs::File>
-where
-    P: Into<path::PathBuf>,
-{
-    FileSource::from_path(path)
-}
-
-impl<T, P> From<P> for FileSource<T>
-where
-    P: Into<path::PathBuf>,
-    T: io::Read,
-{
-    fn from(path: P) -> FileSource<T> {
-        FileSource::from_path(path)
-    }
 }
 
 /// A wrapper around an [`io::Read`] to provide limited [`io::Seek`] access even if the
@@ -282,29 +197,28 @@ pub fn checksum_file(path: &PathBuf) -> io::Result<String> {
         }
         checksum.update(&buf[..i]);
     }
-    let x = base16ct::lower::encode_string(&checksum.finalize());
-    Ok(x)
+    Ok(hex::encode(checksum.finalize()))
 }
 
 #[cfg(feature = "checksum")]
-/// A writable stream that keeps a running MD5 checksum of all bytes
+/// A writable stream that keeps a running SHA-1 checksum of all bytes
 #[derive(Clone)]
-pub(crate) struct MD5HashingStream<T: io::Write> {
+pub(crate) struct SHA1HashingStream<T: io::Write> {
     pub stream: T,
-    pub context: MD5Context,
+    pub context: sha1::Sha1,
 }
 
 #[cfg(feature = "checksum")]
-impl<T: io::Write> MD5HashingStream<T> {
-    pub fn new(file: T) -> MD5HashingStream<T> {
+impl<T: io::Write> SHA1HashingStream<T> {
+    pub fn new(file: T) -> SHA1HashingStream<T> {
         Self {
             stream: file,
-            context: MD5Context::new(),
+            context: sha1::Sha1::new(),
         }
     }
 
-    pub fn compute(&self) -> Digest {
-        self.context.clone().compute()
+    pub fn compute(&self) -> sha1::Sha1 {
+        self.context.clone()
     }
 
     pub fn get_mut(&mut self) -> &mut T {
@@ -316,10 +230,11 @@ impl<T: io::Write> MD5HashingStream<T> {
     }
 }
 
+
 #[cfg(feature = "checksum")]
-impl<T: io::Write> io::Write for MD5HashingStream<T> {
+impl<T: io::Write> io::Write for SHA1HashingStream<T> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.context.consume(buf);
+        self.context.update(buf);
         self.stream.write(buf)
     }
 
@@ -329,7 +244,7 @@ impl<T: io::Write> io::Write for MD5HashingStream<T> {
 }
 
 #[cfg(feature = "checksum")]
-impl<T: io::Seek + io::Write> io::Seek for MD5HashingStream<T> {
+impl<T: io::Seek + io::Write> io::Seek for SHA1HashingStream<T> {
     fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
         self.stream.seek(pos)
     }
@@ -396,20 +311,6 @@ pub use parallelism::ConcurrentLoader;
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn test_from_buffer() {
-        let mut buff: Vec<u8> = Vec::new();
-        buff.extend(b"foobar");
-        let stream = ByteBuffer::new(buff);
-        let mut out: Vec<u8> = Vec::new();
-        let desc = FileSource::<ByteBuffer>::from_stream(stream);
-        assert!(desc.file_name().is_none());
-        if let FileWrapper::Stream(mut buff) = desc.source {
-            buff.read_to_end(&mut out).unwrap();
-            assert_eq!(out, b"foobar");
-        }
-    }
 
     #[test]
     fn test_prebuffering() -> io::Result<()> {

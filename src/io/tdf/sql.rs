@@ -192,6 +192,10 @@ pub struct SQLFrame {
     pub property_group: usize,
     pub num_scans: usize,
     pub num_peaks: usize,
+    pub tims_calibration: u32,
+    pub mz_calibration: u32,
+    pub t1: f64,
+    pub t2: f64,
 }
 
 impl SQLFrame {
@@ -210,6 +214,10 @@ impl SQLFrame {
         property_group: usize,
         num_scans: usize,
         num_peaks: usize,
+        mz_calibration: u32,
+        tims_calibration: u32,
+        t1: f64,
+        t2: f64,
     ) -> Self {
         Self {
             id,
@@ -225,6 +233,10 @@ impl SQLFrame {
             property_group,
             num_scans,
             num_peaks,
+            mz_calibration,
+            tims_calibration,
+            t1,
+            t2,
         }
     }
 }
@@ -249,12 +261,16 @@ impl FromSQL for SQLFrame {
             row.get(10)?,
             row.get(11)?,
             row.get(12)?,
+            row.get(13)?,
+            row.get(14)?,
+            row.get(15)?,
+            row.get(16)?,
         );
         Ok(this)
     }
 
     fn get_sql() -> String {
-        "SELECT Id, Time, Polarity, ScanMode, MsMsType, TimsId, MaxIntensity, SummedIntensities, AccumulationTime, RampTime, PropertyGroup, NumScans, NumPeaks FROM Frames".into()
+        "SELECT Id, Time, Polarity, ScanMode, MsMsType, TimsId, MaxIntensity, SummedIntensities, AccumulationTime, RampTime, PropertyGroup, NumScans, NumPeaks, MzCalibration, TimsCalibration, T1, T2 FROM Frames".into()
     }
 }
 
@@ -266,7 +282,7 @@ pub struct RawTDFSQLReader {
 #[allow(unused)]
 impl RawTDFSQLReader {
     pub fn new(tdf_path: &Path) -> Result<Self, Error> {
-        let connection = ReentrantMutex::new(Connection::open(tdf_path)?);
+        let connection = ReentrantMutex::new(Connection::open_with_flags(tdf_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?);
         Ok(Self { connection })
     }
 

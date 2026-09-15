@@ -1,4 +1,4 @@
-use mzdata::params::{Param, ParamDescribed, ParamLike, ValueRef, CURIE, CURIEParsingError, Unit};
+use mzdata::params::{CURIE, CURIEParsingError, Param, ParamDescribed, ParamLike, Unit, ValueRef};
 use mzdata::spectrum::{Activation, IsolationWindow, Precursor, ScanEvent, ScanWindow, SelectedIon};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyList, PyString, PyInt};
@@ -10,6 +10,25 @@ use pyo3::types::{PyBool, PyFloat, PyList, PyString, PyInt};
 #[pyclass(name = "Param", module = "pymzdata", skip_from_py_object)]
 #[derive(Debug, Clone)]
 pub struct PyParam(pub Param);
+
+fn value_to_py<'a, 'py>(value: ValueRef<'a>, py: Python<'py>) -> Py<PyAny> {
+    match value {
+        ValueRef::String(s) => PyString::new(py, s.as_ref()).into_any().unbind(),
+        ValueRef::Float(f) => PyFloat::new(py, f).into_any().unbind(),
+        ValueRef::Int(i) => PyInt::new(py, i).into_any().unbind(),
+        ValueRef::Boolean(b) => PyBool::new(py, b).to_owned().into_any().unbind(),
+        ValueRef::Buffer(buf) => {
+            let list = PyList::new(py, buf.iter().copied().map(|b| b as u32))
+                .expect("Failed to create list");
+            list.into_any().unbind()
+        }
+        ValueRef::Empty => py.None(),
+        ValueRef::List(val) => {
+            let list = PyList::new(py, val.iter().map(|v| value_to_py(v.as_ref(), py))).expect("Failed to create list");
+            list.into_any().unbind()
+        }
+    }
+}
 
 #[pymethods]
 impl PyParam {
@@ -27,18 +46,7 @@ impl PyParam {
     /// The parameter value as a Python primitive (str, float, int, bool, list, or None).
     #[getter]
     fn value(&self, py: Python<'_>) -> Py<PyAny> {
-        match self.0.value() {
-            ValueRef::String(s) => PyString::new(py, s.as_ref()).into_any().unbind(),
-            ValueRef::Float(f) => PyFloat::new(py, f).into_any().unbind(),
-            ValueRef::Int(i) => PyInt::new(py, i).into_any().unbind(),
-            ValueRef::Boolean(b) => PyBool::new(py, b).to_owned().into_any().unbind(),
-            ValueRef::Buffer(buf) => {
-                let list = PyList::new(py, buf.iter().copied().map(|b| b as u32))
-                    .expect("Failed to create list");
-                list.into_any().unbind()
-            }
-            ValueRef::Empty => py.None(),
-        }
+        value_to_py(self.0.value(), py)
     }
 
     /// The unit name (e.g. `"minute"`, `"dalton"`, or `"none"`).
@@ -77,6 +85,22 @@ impl From<Param> for PyParam {
         PyParam(p)
     }
 }
+
+
+pub fn find_param(source: &impl ParamDescribed,  name: Option<&str>, accession: Option<&str>) -> PyResult<Option<PyParam>> {
+    if name.is_none() && accession.is_none() {
+        return Err(pyo3::exceptions::PyTypeError::new_err("Must provide one of `name` or `accession`"));
+    }
+    if let Some(name) = name {
+        Ok(source.params().iter().find(|p| p.name() == name).cloned().map(PyParam))
+    } else if let Some(accession) = accession {
+        let acc: Option<CURIE> = Some(accession.parse().map_err(|e: CURIEParsingError| pyo3::exceptions::PyValueError::new_err(e.to_string()))?);
+        Ok(source.params().iter().find(|p| p.curie() == acc).cloned().map(PyParam))
+    } else {
+        Ok(None)
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // PyIsolationWindow
@@ -176,6 +200,11 @@ impl PySelectedIon {
         self.0.params().iter().cloned().map(PyParam).collect()
     }
 
+    #[pyo3(signature = (name = None, accession = None))]
+    fn find_param(&self, name: Option<&str>, accession: Option<&str>) -> PyResult<Option<PyParam>> {
+        find_param(&self.0, name, accession)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "SelectedIon(mz={:.4}, intensity={}, charge={:?})",
@@ -216,6 +245,11 @@ impl PyActivation {
 
     fn params(&self) -> Vec<PyParam> {
         self.0.params.iter().cloned().map(PyParam).collect()
+    }
+
+    #[pyo3(signature = (name = None, accession = None))]
+    fn find_param(&self, name: Option<&str>, accession: Option<&str>) -> PyResult<Option<PyParam>> {
+        find_param(&self.0, name, accession)
     }
 
     fn __repr__(&self) -> String {
@@ -308,18 +342,7 @@ impl PyScanEvent {
 
     #[pyo3(signature = (name = None, accession = None))]
     fn find_param(&self, name: Option<&str>, accession: Option<&str>) -> PyResult<Option<PyParam>> {
-        use mzdata::params::ParamDescribed;
-        if name.is_none() && accession.is_none() {
-            return Err(pyo3::exceptions::PyTypeError::new_err("Must provide one of `name` or `accession`"));
-        }
-        if let Some(name) = name {
-            Ok(self.0.params().iter().find(|p| p.name() == name).cloned().map(PyParam))
-        } else if let Some(accession) = accession {
-            let acc: Option<CURIE> = Some(accession.parse().map_err(|e: CURIEParsingError| pyo3::exceptions::PyValueError::new_err(e.to_string()))?);
-            Ok(self.0.params().iter().find(|p| p.curie() == acc).cloned().map(PyParam))
-        } else {
-            Ok(None)
-        }
+        find_param(&self.0, name, accession)
     }
 
     fn __repr__(&self) -> String {

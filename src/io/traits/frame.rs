@@ -1001,6 +1001,11 @@ pub trait IntoIonMobilityFrameSource<C: CentroidLike, D: DeconvolutedCentroidLik
         let details = *self.detail_level();
         self.set_detail_level(DetailLevel::Lazy);
         let n = self.len();
+        // `step_by` panics on a zero step, so bail out before computing one.
+        if n == 0 {
+            self.set_detail_level(details);
+            return Some(HasIonMobility::None);
+        }
         let mut handle = self.iter();
         let mut status = HasIonMobility::None;
         let step_size = if n > 100 { n / 100 } else { n };
@@ -1014,5 +1019,551 @@ pub trait IntoIonMobilityFrameSource<C: CentroidLike, D: DeconvolutedCentroidLik
         }
         self.set_detail_level(details);
         Some(status)
+    }
+}
+
+#[cfg(feature = "async_partial")]
+mod async_traits {
+    use std::future::Future;
+
+    use futures::{
+        stream::{self, FusedStream},
+        Stream,
+    };
+
+    use super::*;
+    use crate::io::traits::{AsyncRandomAccessSpectrumIterator, AsyncSpectrumSource};
+
+    /// An asynchronous analog of [`IonMobilityFrameSource`], the base trait defining
+    /// the behaviors of an async source of ion mobility frames.
+    ///
+    /// This is the frame-side mirror of
+    /// [`AsyncSpectrumSource`](crate::io::traits::AsyncSpectrumSource).
+    pub trait AsyncIonMobilityFrameSource<
+        C: FeatureLike<MZ, IonMobility> = Feature<MZ, IonMobility>,
+        D: FeatureLike<Mass, IonMobility> + KnownCharge = ChargedFeature<Mass, IonMobility>,
+        S: IonMobilityFrameLike<C, D> = MultiLayerIonMobilityFrame<C, D>,
+    >: Send
+    {
+        /// Rewind the current position of the source to the beginning
+        fn reset(&mut self) -> impl Future<Output = ()>;
+
+        /// Get the [`DetailLevel`] the reader currently uses
+        fn detail_level(&self) -> &DetailLevel;
+
+        /// Set the [`DetailLevel`] for the reader, changing
+        /// the amount of work done immediately on loading a
+        /// frame.
+        ///
+        /// # Note
+        /// Not all readers support all detail levels, and the
+        /// behavior when requesting one of those levels will
+        /// depend upon the underlying reader.
+        fn set_detail_level(&mut self, detail_level: DetailLevel);
+
+        /// Retrieve a frame by it's native ID
+        fn get_frame_by_id(&mut self, id: &str) -> impl Future<Output = Option<S>>;
+
+        /// Retrieve a frame by it's integer index
+        fn get_frame_by_index(&mut self, index: usize) -> impl Future<Output = Option<S>>;
+
+        /// Retrieve a frame by its scan start time
+        /// Considerably more complex than seeking by ID or index, this involves
+        /// a binary search over the frame index and assumes that frames are stored
+        /// in chronological order.
+        #[allow(async_fn_in_trait)]
+        async fn get_frame_by_time(&mut self, time: f64) -> Option<S> {
+            {
+                let n = self.len();
+                if n == 0 && !self.get_index().init {
+                    warn!("Attempting to use `get_frame_by_time` when the frame index has not been initialized.");
+                    return None;
+                }
+                let mut lo: usize = 0;
+                let mut hi: usize = n;
+
+                let mut best_error: f64 = f64::INFINITY;
+                let mut best_match: Option<S> = None;
+
+                if lo == hi {
+                    return None;
+                }
+
+                let original_detail_level = *self.detail_level();
+                self.set_detail_level(DetailLevel::MetadataOnly);
+                while hi != lo {
+                    let mid = (hi + lo) / 2;
+                    let scan = self.get_frame_by_index(mid).await?;
+                    let scan_time = scan.start_time();
+                    let err = (scan_time - time).abs();
+
+                    if err < best_error {
+                        best_error = err;
+                        best_match = Some(scan);
+                    }
+                    if hi.saturating_sub(1) == lo {
+                        self.set_detail_level(original_detail_level);
+                        return best_match;
+                    } else if scan_time > time {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                self.set_detail_level(original_detail_level);
+                best_match
+            }
+        }
+
+        /// Retrieve the number of frames in source file, usually by getting
+        /// the length of the index. If the index isn't initialized, this will
+        /// be 0.
+        fn len(&self) -> usize {
+            self.get_index().len()
+        }
+
+        fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+
+        /// Access the frame offset index to enumerate all frames by ID
+        fn get_index(&self) -> &OffsetIndex;
+
+        /// Set the frame offset index. This method shouldn't be needed if not writing
+        /// a new adapter
+        fn set_index(&mut self, index: OffsetIndex);
+
+        /// Helper method to support seeking to an ID
+        fn _offset_of_id(&self, id: &str) -> Option<u64> {
+            self.get_index().get(id)
+        }
+
+        /// Helper method to support seeking to an index
+        fn _offset_of_index(&self, index: usize) -> Option<u64> {
+            self.get_index()
+                .get_index(index)
+                .map(|(_id, offset)| offset)
+        }
+
+        /// Helper method to support seeking to a specific time.
+        /// Considerably more complex than seeking by ID or index.
+        #[allow(async_fn_in_trait)]
+        async fn _offset_of_time(&mut self, time: f64) -> Option<u64> {
+            {
+                match self.get_frame_by_time(time).await {
+                    Some(scan) => self._offset_of_index(scan.index()),
+                    None => None,
+                }
+            }
+        }
+
+        /// Read the next frame from the source, advancing the current position
+        fn read_next_frame(&mut self) -> impl Future<Output = Option<S>>;
+
+        /// Wrap this source in a [`Stream`] over its frames
+        ///
+        /// The returned stream is [`Unpin`], so it can be driven directly with
+        /// [`StreamExt::next`](futures::StreamExt::next) without pinning it first.
+        fn as_stream(&mut self) -> impl IonMobilityFrameStream<C, D, S> + Unpin + '_ {
+            Box::pin(stream::unfold(self, |reader| async {
+                let frame = reader.read_next_frame();
+                frame.await.map(|val| (val, reader))
+            }))
+        }
+    }
+
+    /// An asynchronous analog of [`RandomAccessIonMobilityFrameIterator`], extending
+    /// [`AsyncIonMobilityFrameSource`] with relocatable iteration relative to a specific
+    /// frame coordinate or identifier.
+    pub trait AsyncRandomAccessIonMobilityFrameIterator<
+        C: FeatureLike<MZ, IonMobility> = Feature<MZ, IonMobility>,
+        D: FeatureLike<Mass, IonMobility> + KnownCharge = ChargedFeature<Mass, IonMobility>,
+        S: IonMobilityFrameLike<C, D> = MultiLayerIonMobilityFrame<C, D>,
+    >: AsyncIonMobilityFrameSource<C, D, S> + Sized
+    {
+        /// Start iterating from the frame whose native ID matches `id`
+        fn start_from_id(
+            &mut self,
+            id: &str,
+        ) -> impl Future<Output = Result<&mut Self, IonMobilityFrameAccessError>>;
+
+        /// Start iterating from the frame whose index is `index`
+        fn start_from_index(
+            &mut self,
+            index: usize,
+        ) -> impl Future<Output = Result<&mut Self, IonMobilityFrameAccessError>>;
+
+        /// Start iterating from the frame starting closest to `time`
+        fn start_from_time(
+            &mut self,
+            time: f64,
+        ) -> impl Future<Output = Result<&mut Self, IonMobilityFrameAccessError>>;
+    }
+
+    /// A [`Stream`] over ion mobility frames, the frame-side analog of
+    /// [`SpectrumStream`](crate::io::traits::SpectrumStream).
+    pub trait IonMobilityFrameStream<
+        C: FeatureLike<MZ, IonMobility> = Feature<MZ, IonMobility>,
+        D: FeatureLike<Mass, IonMobility> + KnownCharge = ChargedFeature<Mass, IonMobility>,
+        S: IonMobilityFrameLike<C, D> = MultiLayerIonMobilityFrame<C, D>,
+    >: Stream<Item = S> + FusedStream
+    {
+    }
+
+    impl<
+            C: FeatureLike<MZ, IonMobility>,
+            D: FeatureLike<Mass, IonMobility> + KnownCharge,
+            S: IonMobilityFrameLike<C, D>,
+            T: Stream<Item = S> + FusedStream,
+        > IonMobilityFrameStream<C, D, S> for T
+    {
+    }
+
+    /// Adapt an [`AsyncSpectrumSource`] that contains spectra with a non-scalar ion mobility
+    /// dimension to an [`AsyncIonMobilityFrameSource`].
+    ///
+    /// This is the asynchronous analog of [`Generic3DIonMobilityFrameSource`].
+    ///
+    /// # Note
+    /// The `Send` bounds on the peak and feature types are required because
+    /// [`AsyncIonMobilityFrameSource`] has a [`Send`] supertrait, and this type holds a
+    /// [`PhantomData`] of each of them.
+    #[derive(Debug)]
+    pub struct AsyncGeneric3DIonMobilityFrameSource<
+        CP: CentroidLike + Send + Sync,
+        DP: DeconvolutedCentroidLike + Send + Sync,
+        R: AsyncSpectrumSource<CP, DP, MultiLayerSpectrum<CP, DP>>,
+        C: FeatureLike<MZ, IonMobility> + Send + Sync = Feature<MZ, IonMobility>,
+        D: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync = ChargedFeature<
+            Mass,
+            IonMobility,
+        >,
+    > {
+        source: R,
+        _cp: PhantomData<CP>,
+        _dp: PhantomData<DP>,
+        _c: PhantomData<C>,
+        _d: PhantomData<D>,
+    }
+
+    impl<
+            CP: CentroidLike + Send + Sync,
+            DP: DeconvolutedCentroidLike + Send + Sync,
+            R: AsyncSpectrumSource<CP, DP, MultiLayerSpectrum<CP, DP>>,
+            C: FeatureLike<MZ, IonMobility> + Send + Sync,
+            D: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        > AsyncGeneric3DIonMobilityFrameSource<CP, DP, R, C, D>
+    {
+        pub fn new(source: R) -> Self {
+            Self {
+                source,
+                _cp: PhantomData,
+                _dp: PhantomData,
+                _c: PhantomData,
+                _d: PhantomData,
+            }
+        }
+
+        pub fn get_inner(&self) -> &R {
+            &self.source
+        }
+
+        pub fn get_mut(&mut self) -> &mut R {
+            &mut self.source
+        }
+
+        pub fn into_inner(self) -> R {
+            self.source
+        }
+    }
+
+    impl<
+            CP: CentroidLike + Send + Sync,
+            DP: DeconvolutedCentroidLike + Send + Sync,
+            R: AsyncSpectrumSource<CP, DP, MultiLayerSpectrum<CP, DP>>,
+            C: FeatureLike<MZ, IonMobility> + Send + Sync,
+            D: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        > MSDataFileMetadata for AsyncGeneric3DIonMobilityFrameSource<CP, DP, R, C, D>
+    where
+        R: MSDataFileMetadata,
+    {
+        crate::delegate_impl_metadata_trait!(source);
+    }
+
+    impl<
+            CP: CentroidLike + Send + Sync,
+            DP: DeconvolutedCentroidLike + Send + Sync,
+            R: AsyncSpectrumSource<CP, DP, MultiLayerSpectrum<CP, DP>>,
+            C: FeatureLike<MZ, IonMobility> + Send + Sync,
+            D: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        > AsyncIonMobilityFrameSource<C, D, MultiLayerIonMobilityFrame<C, D>>
+        for AsyncGeneric3DIonMobilityFrameSource<CP, DP, R, C, D>
+    {
+        fn detail_level(&self) -> &DetailLevel {
+            self.source.detail_level()
+        }
+
+        fn set_detail_level(&mut self, detail_level: DetailLevel) {
+            self.source.set_detail_level(detail_level);
+        }
+
+        async fn reset(&mut self) {
+            self.source.reset().await
+        }
+
+        async fn get_frame_by_id(&mut self, id: &str) -> Option<MultiLayerIonMobilityFrame<C, D>> {
+            let s = self.source.get_spectrum_by_id(id).await?;
+            MultiLayerIonMobilityFrame::try_from(s).map_or_else(
+                |err| {
+                    warn!("Failed to convert {id} to MultiLayerIonMobilityFrame: {err}");
+                    None
+                },
+                Some,
+            )
+        }
+
+        async fn get_frame_by_index(
+            &mut self,
+            index: usize,
+        ) -> Option<MultiLayerIonMobilityFrame<C, D>> {
+            let s = self.source.get_spectrum_by_index(index).await?;
+            MultiLayerIonMobilityFrame::try_from(s).map_or_else(
+                |err| {
+                    warn!("Failed to convert {index} to MultiLayerIonMobilityFrame: {err}");
+                    None
+                },
+                Some,
+            )
+        }
+
+        async fn get_frame_by_time(
+            &mut self,
+            time: f64,
+        ) -> Option<MultiLayerIonMobilityFrame<C, D>> {
+            let s = self.source.get_spectrum_by_time(time).await?;
+            MultiLayerIonMobilityFrame::try_from(s).map_or_else(
+                |err| {
+                    warn!("Failed to convert {time} to MultiLayerIonMobilityFrame: {err}");
+                    None
+                },
+                Some,
+            )
+        }
+
+        /// Read spectra from the underlying source until one converts to a frame,
+        /// warning about and skipping any that do not.
+        async fn read_next_frame(&mut self) -> Option<MultiLayerIonMobilityFrame<C, D>> {
+            while let Some(s) = self.source.read_next().await {
+                match MultiLayerIonMobilityFrame::try_from(s) {
+                    Ok(frame) => return Some(frame),
+                    Err(err) => {
+                        warn!("Failed to convert spectrum to MultiLayerIonMobilityFrame: {err}")
+                    }
+                }
+            }
+            None
+        }
+
+        fn get_index(&self) -> &OffsetIndex {
+            self.source.get_index()
+        }
+
+        fn set_index(&mut self, index: OffsetIndex) {
+            self.source.set_index(index)
+        }
+    }
+
+    impl<
+            CP: CentroidLike + Send + Sync,
+            DP: DeconvolutedCentroidLike + Send + Sync,
+            R: AsyncSpectrumSource<CP, DP, MultiLayerSpectrum<CP, DP>>,
+            C: FeatureLike<MZ, IonMobility> + Send + Sync,
+            D: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        > AsyncRandomAccessIonMobilityFrameIterator<C, D, MultiLayerIonMobilityFrame<C, D>>
+        for AsyncGeneric3DIonMobilityFrameSource<CP, DP, R, C, D>
+    where
+        R: AsyncRandomAccessSpectrumIterator<CP, DP, MultiLayerSpectrum<CP, DP>>,
+    {
+        async fn start_from_id(
+            &mut self,
+            id: &str,
+        ) -> Result<&mut Self, IonMobilityFrameAccessError> {
+            match self.source.start_from_id(id).await {
+                Ok(_) => Ok(self),
+                Err(e) => Err(IonMobilityFrameAccessError::from(e)),
+            }
+        }
+
+        async fn start_from_index(
+            &mut self,
+            index: usize,
+        ) -> Result<&mut Self, IonMobilityFrameAccessError> {
+            match self.source.start_from_index(index).await {
+                Ok(_) => Ok(self),
+                Err(e) => Err(IonMobilityFrameAccessError::from(e)),
+            }
+        }
+
+        async fn start_from_time(
+            &mut self,
+            time: f64,
+        ) -> Result<&mut Self, IonMobilityFrameAccessError> {
+            match self.source.start_from_time(time).await {
+                Ok(_) => Ok(self),
+                Err(e) => Err(IonMobilityFrameAccessError::from(e)),
+            }
+        }
+    }
+
+    /// Convert an [`AsyncSpectrumSource`] to an [`AsyncIonMobilityFrameSource`] if it detects
+    /// ion mobility frames (3D spectra).
+    ///
+    /// This is the asynchronous analog of [`IntoIonMobilityFrameSource`].
+    pub trait AsyncIntoIonMobilityFrameSource<
+        C: CentroidLike + Send + Sync,
+        D: DeconvolutedCentroidLike + Send + Sync,
+    >: AsyncSpectrumSource<C, D, MultiLayerSpectrum<C, D>> + Sized
+    {
+        /// The [`AsyncIonMobilityFrameSource`]-implementing type for this [`AsyncSpectrumSource`].
+        ///
+        /// When another type isn't available, [`AsyncGeneric3DIonMobilityFrameSource`].
+        type IonMobilityFrameSource<
+            CF: FeatureLike<MZ, IonMobility> + Send + Sync,
+            DF: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        >: AsyncIonMobilityFrameSource<CF, DF, MultiLayerIonMobilityFrame<CF, DF>>;
+
+        /// Attempt to convert the [`AsyncSpectrumSource`] into an [`AsyncIonMobilityFrameSource`],
+        /// returning [`IntoIonMobilityFrameSourceError`] if it is not possible
+        fn try_into_frame_source<
+            CF: FeatureLike<MZ, IonMobility> + Send + Sync,
+            DF: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        >(
+            self,
+        ) -> impl Future<
+            Output = Result<Self::IonMobilityFrameSource<CF, DF>, IntoIonMobilityFrameSourceError>,
+        >;
+
+        /// Call [`AsyncIntoIonMobilityFrameSource::try_into_frame_source`], panicking if an error
+        /// is returned.
+        #[allow(async_fn_in_trait)]
+        async fn into_frame_source<
+            CF: FeatureLike<MZ, IonMobility> + Send + Sync,
+            DF: FeatureLike<Mass, IonMobility> + KnownCharge + Send + Sync,
+        >(
+            self,
+        ) -> Self::IonMobilityFrameSource<CF, DF> {
+            self.try_into_frame_source().await.unwrap()
+        }
+
+        /// Reads a sparse 1% of the entries from the [`AsyncSpectrumSource`], testing
+        /// for the presence of ion mobility data.
+        #[allow(async_fn_in_trait)]
+        async fn has_ion_mobility(&mut self) -> Option<HasIonMobility> {
+            let details = *self.detail_level();
+            self.set_detail_level(DetailLevel::Lazy);
+            let n = self.len();
+            // `step_by` panics on a zero step, so bail out before computing one.
+            if n == 0 {
+                self.set_detail_level(details);
+                return Some(HasIonMobility::None);
+            }
+            let mut status = HasIonMobility::None;
+            let step_size = if n > 100 { n / 100 } else { n };
+            for i in (0..n).step_by(step_size) {
+                let spec = self.get_spectrum_by_index(i).await?;
+                let cls = spec.has_ion_mobility_class();
+                status = status.max(cls);
+                if status > HasIonMobility::None {
+                    break;
+                }
+            }
+            self.set_detail_level(details);
+            Some(status)
+        }
+    }
+}
+
+#[cfg(feature = "async_partial")]
+pub use async_traits::{
+    AsyncGeneric3DIonMobilityFrameSource, AsyncIntoIonMobilityFrameSource,
+    AsyncIonMobilityFrameSource, AsyncRandomAccessIonMobilityFrameIterator, IonMobilityFrameStream,
+};
+
+/// Compile-time checks that the async frame traits are usable through a generic
+/// bound, not just at a concrete implementor. These functions are never called;
+/// they fail the build if a signature regresses.
+#[cfg(all(test, feature = "async_partial"))]
+mod async_trait_tests {
+    use super::*;
+    use crate::io::traits::{AsyncRandomAccessSpectrumIterator, AsyncSpectrumSource};
+    use futures::StreamExt;
+    use mzpeaks::{CentroidPeak, DeconvolutedPeak};
+
+    /// The provided methods must be callable via the trait alone, and `as_stream`
+    /// must return an [`Unpin`] stream so `next()` works without pinning it first.
+    #[allow(unused)]
+    async fn provided_methods_are_callable<S: AsyncIonMobilityFrameSource>(src: &mut S) {
+        let _ = src.get_frame_by_time(1.0).await;
+        let _ = src._offset_of_time(1.0).await;
+        let _ = src.len();
+        let mut stream = src.as_stream();
+        let _first = stream.next().await;
+    }
+
+    #[allow(unused)]
+    async fn random_access_methods_are_callable<S: AsyncRandomAccessIonMobilityFrameIterator>(
+        src: &mut S,
+    ) {
+        let _ = src.start_from_id("x").await;
+        let _ = src.start_from_index(0).await;
+        let _ = src.start_from_time(0.0).await;
+    }
+
+    /// [`AsyncGeneric3DIonMobilityFrameSource`] is the first concrete implementor, so
+    /// this is the first real check that the trait contracts can actually be satisfied.
+    #[allow(unused)]
+    async fn adapter_satisfies_frame_source<R>(source: R)
+    where
+        R: AsyncSpectrumSource<
+            CentroidPeak,
+            DeconvolutedPeak,
+            MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>,
+        >,
+    {
+        fn assert_frame_source<T: AsyncIonMobilityFrameSource>(_: &T) {}
+
+        let mut adapter =
+            AsyncGeneric3DIonMobilityFrameSource::<CentroidPeak, DeconvolutedPeak, R>::new(source);
+        assert_frame_source(&adapter);
+
+        let _ = adapter.get_frame_by_id("x").await;
+        let _ = adapter.get_frame_by_index(0).await;
+        let _ = adapter.get_frame_by_time(0.0).await;
+        let _ = adapter.read_next_frame().await;
+        adapter.reset().await;
+
+        let mut stream = adapter.as_stream();
+        let _first = stream.next().await;
+    }
+
+    /// The random-access impl is conditional on the source being randomly accessible.
+    #[allow(unused)]
+    async fn adapter_satisfies_random_access<R>(source: R)
+    where
+        R: AsyncRandomAccessSpectrumIterator<
+            CentroidPeak,
+            DeconvolutedPeak,
+            MultiLayerSpectrum<CentroidPeak, DeconvolutedPeak>,
+        >,
+    {
+        fn assert_random_access<T: AsyncRandomAccessIonMobilityFrameIterator>(_: &T) {}
+
+        let mut adapter =
+            AsyncGeneric3DIonMobilityFrameSource::<CentroidPeak, DeconvolutedPeak, R>::new(source);
+        assert_random_access(&adapter);
+
+        let _ = adapter.start_from_id("x").await;
+        let _ = adapter.start_from_index(0).await;
+        let _ = adapter.start_from_time(0.0).await;
     }
 }

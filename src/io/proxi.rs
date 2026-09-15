@@ -5,6 +5,7 @@ use std::{
     str::FromStr,
 };
 
+use mzdata_spectrum::IsolationWindowBuilder;
 use num_traits::AsPrimitive;
 use serde::{de::SeqAccess, Deserialize, Deserializer, Serialize};
 
@@ -14,7 +15,7 @@ use crate::{
     params::{ControlledVocabulary, Param, ParamCow, Value, CURIE},
     prelude::*,
     spectrum::{
-        ArrayType, BinaryArrayMap, BinaryDataArrayType, DataArray, IsolationWindowState,
+        ArrayType, BinaryArrayMap, BinaryDataArrayType, DataArray,
         MultiLayerSpectrum, Precursor, ScanPolarity, SignalContinuity, SpectrumDescription,
     },
 };
@@ -238,9 +239,7 @@ fn transform_response(
             title,
             kind,
         }),
-        Err(err) => {
-            Err(PROXIError::IO(backend, err))
-        },
+        Err(err) => Err(PROXIError::IO(backend, err)),
     }
 }
 
@@ -370,6 +369,7 @@ where
         Value::Buffer(v) => serializer.serialize_bytes(v),
         Value::Boolean(v) => serializer.serialize_bool(*v),
         Value::Empty => serializer.serialize_unit(),
+        Value::List(v) => serializer.collect_seq(v.iter()),
     }
 }
 
@@ -410,6 +410,17 @@ where
 
         fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
             Ok(Value::Empty.into())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut entries = Vec::new();
+            while let Some(val) = SeqAccess::next_element::<Value>(&mut seq)? {
+                entries.push(val);
+            }
+            Ok(Value::List(entries.into_boxed_slice()).into())
         }
 
         fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
@@ -480,6 +491,14 @@ impl ParamValue for PROXIValue {
     fn to_bool(&self) -> Result<bool, crate::params::ParamValueParseError> {
         <Value as ParamValue>::to_bool(&self.0)
     }
+
+    fn is_list(&self) -> bool {
+        <Value as ParamValue>::is_list(&self.0)
+    }
+
+    fn as_slice(&self) -> std::borrow::Cow<'_, [Value]> {
+        <Value as ParamValue>::as_slice(&self.0)
+    }
 }
 
 impl Display for PROXIValue {
@@ -491,6 +510,7 @@ impl Display for PROXIValue {
             Value::Buffer(v) => write!(f, "{v:?}"),
             Value::Boolean(v) => write!(f, "{v}"),
             Value::Empty => Ok(()),
+            Value::List(_) => write!(f, "{}", self.0),
         }
     }
 }
@@ -639,6 +659,14 @@ impl ParamValue for PROXIParam {
 
     fn to_bool(&self) -> Result<bool, crate::params::ParamValueParseError> {
         <PROXIValue as ParamValue>::to_bool(&self.value)
+    }
+
+    fn is_list(&self) -> bool {
+        <PROXIValue as ParamValue>::is_list(&self.value)
+    }
+
+    fn as_slice(&self) -> std::borrow::Cow<'_, [Value]> {
+        <PROXIValue as ParamValue>::as_slice(&self.value)
     }
 }
 
@@ -947,7 +975,8 @@ impl From<&PROXISpectrum> for SpectrumDescription {
 
                 "selected ion m/z" => {
                     has_precursor = true;
-                    precursor.ion_mut().unwrap().mz = param.to_f64().expect("Failed to parse ion m/z");
+                    precursor.ion_mut().unwrap().mz =
+                        param.to_f64().expect("Failed to parse ion m/z");
                 }
                 "peak intensity" => {
                     has_precursor = true;
@@ -962,88 +991,47 @@ impl From<&PROXISpectrum> for SpectrumDescription {
 
                 "isolation window target m/z" => {
                     has_precursor = true;
-                    precursor.isolation_window.target = param
-                        .to_f32()
-                        .expect("Failed to parse isolation window target");
-                    precursor.isolation_window.flags = match precursor.isolation_window.flags {
-                        IsolationWindowState::Unknown => IsolationWindowState::Complete,
-                        IsolationWindowState::Explicit | IsolationWindowState::Complete => {
-                            IsolationWindowState::Complete
-                        }
-                        IsolationWindowState::Offset => {
-                            precursor.isolation_window.lower_bound =
-                                precursor.isolation_window.target
-                                    - precursor.isolation_window.lower_bound;
-                            precursor.isolation_window.upper_bound +=
-                                precursor.isolation_window.target;
-                            IsolationWindowState::Complete
-                        }
-                    };
+                    let window = IsolationWindowBuilder(precursor.isolation_window_mut());
+                    window.target(param.to_f32().expect("Failed to parse isolation window target"));
                 }
                 "isolation window lower offset" => {
                     has_precursor = true;
                     let lower_bound = param
                         .to_f32()
                         .expect("Failed to parse isolation window limit");
-                    match precursor.isolation_window.flags {
-                        IsolationWindowState::Unknown => {
-                            precursor.isolation_window.flags = IsolationWindowState::Offset;
-                            precursor.isolation_window.lower_bound = lower_bound;
-                        }
-                        IsolationWindowState::Complete => {
-                            precursor.isolation_window.lower_bound =
-                                precursor.isolation_window.target - lower_bound;
-                        }
-                        _ => {}
-                    }
+                    let window = IsolationWindowBuilder(precursor.isolation_window_mut());
+                    window.lower_offset(lower_bound);
                 }
                 "isolation window upper offset" => {
                     has_precursor = true;
                     let upper_bound = param
                         .to_f32()
                         .expect("Failed to parse isolation window limit");
-                    match precursor.isolation_window.flags {
-                        IsolationWindowState::Unknown => {
-                            precursor.isolation_window.flags = IsolationWindowState::Offset;
-                            precursor.isolation_window.upper_bound = upper_bound;
-                        }
-                        IsolationWindowState::Complete => {
-                            precursor.isolation_window.upper_bound =
-                                precursor.isolation_window.target + upper_bound;
-                        }
-                        _ => {}
-                    }
+                    let window = IsolationWindowBuilder(precursor.isolation_window_mut());
+                    window.upper_offset(upper_bound);
                 }
                 "isolation window lower limit" => {
                     has_precursor = true;
+                    let window = IsolationWindowBuilder(precursor.isolation_window_mut());
                     let lower_bound = param
                         .to_f32()
                         .expect("Failed to parse isolation window limit");
-                    if matches!(
-                        precursor.isolation_window.flags,
-                        IsolationWindowState::Unknown
-                    ) {
-                        precursor.isolation_window.flags = IsolationWindowState::Explicit;
-                        precursor.isolation_window.lower_bound = lower_bound;
-                    }
+                    window.lower_limit(lower_bound);
                 }
                 "isolation window upper limit" => {
                     has_precursor = true;
                     let upper_bound = param
                         .to_f32()
                         .expect("Failed to parse isolation window limit");
-                    if matches!(
-                        precursor.isolation_window.flags,
-                        IsolationWindowState::Unknown
-                    ) {
-                        precursor.isolation_window.flags = IsolationWindowState::Explicit;
-                        precursor.isolation_window.upper_bound = upper_bound;
-                    }
+                    let window = IsolationWindowBuilder(precursor.isolation_window_mut());
+                    window.upper_limit(upper_bound);
                 }
                 _ => {
                     let mut p = Param::new_key_value(param.name.clone(), param.value.clone());
                     if let PROXIAccession::CURIE(c) = param.accession {
                         p.accession = Some(c.accession);
+                    } else {
+                        log::debug!("{:?} could not be translated to a compact CURIE instance, dropping accession", param.accession)
                     }
                     p.controlled_vocabulary = Some(param.accession.controlled_vocabulary());
                     this.add_param(p);
@@ -1317,9 +1305,9 @@ mod test {
 
     #[test]
     fn test_proxi_parse() {
-        let spec: PROXISpectrum = serde_json::from_reader(
-            std::fs::File::open("test/data/proxi_test.json").unwrap()
-        ).unwrap();
+        let spec: PROXISpectrum =
+            serde_json::from_reader(std::fs::File::open("test/data/proxi_test.json").unwrap())
+                .unwrap();
         assert!(!spec.mzs.is_empty());
         assert!(!spec.attributes.is_empty());
     }

@@ -1,5 +1,8 @@
 use std::{
-    cmp::Ordering, collections::HashMap, io, sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError}, time::Duration
+    collections::HashMap,
+    io,
+    sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError},
+    time::Duration,
 };
 
 use mzpeaks::{CentroidLike, DeconvolutedCentroidLike};
@@ -8,49 +11,7 @@ use crate::prelude::*;
 
 use super::MultiLayerSpectrum;
 
-/// The different kinds of orientations ion mobility data may be present in.
-#[derive(Debug, Default, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum HasIonMobility {
-    /// No ion mobility measurement found
-    #[default]
-    None = 0,
-    /// A single ion mobility point measurement
-    Point = 1,
-    /// Multiple ion mobility point measurements along an axis
-    Dimension = 2
-}
-
-impl PartialOrd for HasIonMobility {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for HasIonMobility {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self {
-            HasIonMobility::None => {
-                match other {
-                    HasIonMobility::None => Ordering::Equal,
-                    _ => Ordering::Less
-                }
-            },
-            HasIonMobility::Point => {
-                match other {
-                    HasIonMobility::None => Ordering::Greater,
-                    HasIonMobility::Point => Ordering::Equal,
-                    HasIonMobility::Dimension => Ordering::Less,
-                }
-            },
-            HasIonMobility::Dimension => {
-                match other {
-                    HasIonMobility::Dimension => Ordering::Equal,
-                    _ => Ordering::Greater
-                }
-            },
-        }
-    }
-}
+pub use mzdata_spectrum::HasIonMobility;
 
 /// A helper for consuming parallel iteration in the original ordering sequentially later.
 /// Useful for things like splitting work up with `rayon` and then merging it back together
@@ -284,22 +245,21 @@ impl<
     }
 }
 
+// Senders
+
 impl<
         C: CentroidLike + Send + BuildArrayMapFrom + BuildFromArrayMap + Clone,
         D: DeconvolutedCentroidLike + Send + BuildArrayMapFrom + BuildFromArrayMap + Clone,
-    > SpectrumWriter<C, D> for Sender<MultiLayerSpectrum<C, D>> {
+    > SpectrumWriter<C, D> for Sender<MultiLayerSpectrum<C, D>>
+{
     fn write<S: SpectrumLike<C, D> + 'static>(&mut self, spectrum: &S) -> std::io::Result<usize> {
         let k = spectrum.index();
         let peaks = spectrum.peaks().cloned();
         let descr = spectrum.description().clone();
         let t = MultiLayerSpectrum::from_peaks_data_levels_and_description(peaks, descr);
         match self.send(t) {
-            Ok(_) => {Ok(k)},
-            Err(e) => {
-                Err(
-                    io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())
-                )
-            },
+            Ok(_) => Ok(k),
+            Err(e) => Err(io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())),
         }
     }
 
@@ -311,12 +271,8 @@ impl<
         let (peaks, description) = spectrum.into_peaks_and_description();
         let t = MultiLayerSpectrum::from_peaks_data_levels_and_description(peaks, description);
         match self.send(t) {
-            Ok(_) => {Ok(k)},
-            Err(e) => {
-                Err(
-                    io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())
-                )
-            },
+            Ok(_) => Ok(k),
+            Err(e) => Err(io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())),
         }
     }
 
@@ -329,24 +285,19 @@ impl<
     }
 }
 
-
-
 impl<
         C: CentroidLike + Send + BuildArrayMapFrom + BuildFromArrayMap + Clone,
         D: DeconvolutedCentroidLike + Send + BuildArrayMapFrom + BuildFromArrayMap + Clone,
-    > SpectrumWriter<C, D> for SyncSender<MultiLayerSpectrum<C, D>> {
+    > SpectrumWriter<C, D> for SyncSender<MultiLayerSpectrum<C, D>>
+{
     fn write<S: SpectrumLike<C, D> + 'static>(&mut self, spectrum: &S) -> std::io::Result<usize> {
         let k = spectrum.index();
         let peaks = spectrum.peaks().cloned();
         let descr = spectrum.description().clone();
         let t = MultiLayerSpectrum::from_peaks_data_levels_and_description(peaks, descr);
         match self.send(t) {
-            Ok(_) => {Ok(k)},
-            Err(e) => {
-                Err(
-                    io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())
-                )
-            },
+            Ok(_) => Ok(k),
+            Err(e) => Err(io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())),
         }
     }
 
@@ -358,12 +309,8 @@ impl<
         let (peaks, description) = spectrum.into_peaks_and_description();
         let t = MultiLayerSpectrum::from_peaks_data_levels_and_description(peaks, description);
         match self.send(t) {
-            Ok(_) => {Ok(k)},
-            Err(e) => {
-                Err(
-                    io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())
-                )
-            },
+            Ok(_) => Ok(k),
+            Err(e) => Err(io::Error::new(io::ErrorKind::BrokenPipe, e.to_string())),
         }
     }
 

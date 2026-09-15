@@ -13,7 +13,7 @@ use ndarray::Ix1;
 use thiserror::Error;
 
 use mzpeaks::{prelude::*, CentroidPeak, DeconvolutedPeak};
-
+use super::common::{type_descr_to_binary_data_array_type, h5_type_to_binary_array_data_type};
 use crate::io::{
     mzml::{
         CVParamParse, EntryType, IncrementingIdMap, MzMLParserError, MzMLParserState,
@@ -204,7 +204,7 @@ impl ExternalDataRegistry {
     ) -> Result<(), hdf5::Error> {
         let dtype = dataset.dtype()?;
         let sel: Selection = (start..end).into();
-        let mztype: BinaryDataArrayType = dtype.into();
+        let mztype: BinaryDataArrayType = h5_type_to_binary_array_data_type(dtype);
         match mztype {
             BinaryDataArrayType::Unknown => todo!(),
             BinaryDataArrayType::Float64 => {
@@ -360,7 +360,8 @@ impl ExternalDataRegistry {
             let dtype = dset.dtype()?;
             let block_end = (start + self.chunk_size).min(dset.size());
             let cache_block = Self::read_slice_to_bytes(dset, start, block_end)?;
-            let cache_block = DataArray::wrap(&destination.name, dtype.into(), cache_block);
+
+            let cache_block = DataArray::wrap(&destination.name, h5_type_to_binary_array_data_type(dtype), cache_block);
             let mut cache_block = CacheInterval::new(start, block_end, cache_block);
             let block = if let Some(cache_block) =
                 self.chunk_cache.get_mut(&range_request.name).map(|prev| {
@@ -678,6 +679,14 @@ impl<'a, C: CentroidLike + BuildFromArrayMap, D: DeconvolutedCentroidLike + Buil
 
     fn fill_binary_data_array<P: ParamLike + Into<Param> + ParamValue>(&mut self, param: P) {
         self.inner.fill_binary_data_array(param)
+    }
+
+    fn product_isolation_window_mut(&mut self) -> &mut IsolationWindow {
+        self.inner.product_isolation_window_mut()
+    }
+
+    fn new_product(&mut self) -> &mut crate::spectrum::Product {
+        self.inner.new_product()
     }
 
     fn borrow_metadata(
