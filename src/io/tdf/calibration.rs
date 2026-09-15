@@ -1,14 +1,86 @@
 //! The majority of this code is adapted from https://github.com/jspaezp/timsrust-calibration,
 //! distributed under the Apache-2.0 license.
 //!
-//! It is replicated to be compatible with `timsrust` v0.4.1 instead of v0.5+ which introduces
-//! greater complexity, and to avoid adding a second SQLite3 implementation.
+//! It is replicated to be compatible with `timsrust` v0.4-style raw-`f64`
+//! conversion (the v0.5+ newtype-indexed `Converter` model is heavier than
+//! what this module needs), and to avoid adding a second SQLite3
+//! implementation.
 use mzdata_param::{curie, Param, Unit, Value};
 use rusqlite::Connection;
 use thiserror::Error;
-use timsrust::converters::{ConvertableDomain, Scan2ImConverter, Tof2MzConverter};
 
 use super::sql::{FromSQL, SQLFrame};
+
+/// The index <-> value conversion interface used across the TDF module.
+///
+/// Mirrors the `ConvertableDomain` trait of `timsrust` 0.4: conversion
+/// happens in raw `f64` space (TOF/scan index in, m/z or 1/K0 out) so
+/// callers can mix raw indices and calibrated values freely.
+pub trait ConvertableDomain {
+    fn convert<T: Into<f64> + Copy>(&self, value: T) -> f64;
+    fn invert<T: Into<f64> + Copy>(&self, value: T) -> f64;
+}
+
+/// The basic square-root TOF -> m/z model over the acquisition m/z bounds:
+/// `mz = (tof_intercept + tof_slope * tof)^2`.
+///
+/// Semantically identical to `timsrust`'s `UncalibratedTof2MzConverter`, kept
+/// local so this module stays independent of the timsrust converter stack.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Tof2MzConverter {
+    pub tof_intercept: f64,
+    pub tof_slope: f64,
+}
+
+impl Tof2MzConverter {
+    pub fn new(tof_intercept: f64, tof_slope: f64) -> Self {
+        Self {
+            tof_intercept,
+            tof_slope,
+        }
+    }
+}
+
+impl ConvertableDomain for Tof2MzConverter {
+    fn convert<T: Into<f64> + Copy>(&self, value: T) -> f64 {
+        let tof = value.into();
+        (self.tof_intercept + self.tof_slope * tof).powi(2)
+    }
+
+    fn invert<T: Into<f64> + Copy>(&self, value: T) -> f64 {
+        let mz = value.into();
+        (mz.sqrt() - self.tof_intercept) / self.tof_slope
+    }
+}
+
+/// The basic linear scan -> 1/K0 model over the acquisition IM bounds:
+/// `im = scan_intercept + scan_slope * scan`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Scan2ImConverter {
+    pub scan_intercept: f64,
+    pub scan_slope: f64,
+}
+
+impl Scan2ImConverter {
+    pub fn new(scan_intercept: f64, scan_slope: f64) -> Self {
+        Self {
+            scan_intercept,
+            scan_slope,
+        }
+    }
+}
+
+impl ConvertableDomain for Scan2ImConverter {
+    fn convert<T: Into<f64> + Copy>(&self, value: T) -> f64 {
+        let scan = value.into();
+        self.scan_intercept + self.scan_slope * scan
+    }
+
+    fn invert<T: Into<f64> + Copy>(&self, value: T) -> f64 {
+        let im = value.into();
+        (im - self.scan_intercept) / self.scan_slope
+    }
+}
 
 fn require_at<T: rusqlite::types::FromSql>(
     row: &rusqlite::Row<'_>,
@@ -245,7 +317,7 @@ impl CalibrationParameters {
 
     pub fn from_sql(
         connection: &Connection,
-        metadata: &timsrust::Metadata,
+        metadata: &timsrust_tdf::Metadata,
     ) -> Result<Self, rusqlite::Error> {
         let mz = MzCalibration::read_from(connection, [])?;
         let tims = TimsCalibration::read_from(connection, [])?;
@@ -276,14 +348,22 @@ impl CalibrationParameters {
             |row| row.get::<usize, String>(0),
         )?;
         let use_otof_control = acq_sw == "Bruker otofControl";
-        let basic_tims_parameters =
-            im_boundaries_to_parameter(metadata.lower_im, metadata.upper_im, scan_max_index);
+        let basic_tims_parameters = im_boundaries_to_parameter(
+            f64::from(metadata.lower_im()),
+            f64::from(metadata.upper_im()),
+            scan_max_index,
+        );
 
         let basic_mz_parameters = mz_boundaries_to_parameter(
-            metadata.lower_mz,
-            metadata.upper_mz,
+            f64::from(metadata.lower_mz()),
+            f64::from(metadata.upper_mz()),
             tof_max_index,
         );
+
+        let basic_mz_model =
+            Tof2MzConverter::new(basic_mz_parameters[0], basic_mz_parameters[1]);
+        let basic_im_model =
+            Scan2ImConverter::new(basic_tims_parameters[0], basic_tims_parameters[1]);
 
         Ok(Self::new(
             mz,
@@ -291,10 +371,10 @@ impl CalibrationParameters {
             basic_mz_parameters,
             basic_tims_parameters,
             use_otof_control,
-            metadata.mz_converter,
-            metadata.im_converter,
+            basic_mz_model,
+            basic_im_model,
             true,
-            true
+            true,
         ))
     }
 

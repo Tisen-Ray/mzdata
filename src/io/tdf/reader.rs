@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap, io, iter::FusedIterator, marker::PhantomData, ops::Range, path::Path,
-    sync::Arc,
+    collections::HashMap, io, iter::FusedIterator, marker::PhantomData, ops::Range,
+    path::{Path, PathBuf}, sync::Arc,
 };
 
 use chrono::DateTime;
@@ -40,20 +40,20 @@ use crate::{
 use identity_hash::BuildIdentityHasher;
 use rusqlite::Error;
 
-use timsrust::{
-    converters::ConvertableDomain,
-    readers::{FrameReader, FrameReaderError, MetadataReader},
-    Metadata, TimsRustError,
-};
+use timsrust_core::FrameIons;
+use timsrust_tdf::{FrameReaderError, Metadata as TDFMetadata, TdfFrameReader};
 
 use super::{
     arrays::{consolidate_peaks, FrameToArraysMapper},
-    calibration::{CalibrationParameters, MzCalibrationModel, TimsCalibrationModel},
+    calibration::{
+        CalibrationParameters, ConvertableDomain, MzCalibrationModel, TimsCalibrationModel,
+    },
     constants::{InstrumentSource, MsMsType},
     sql::{
         ChromatographyData, FromSQL, PasefPrecursor, RawTDFSQLReader, SQLDIAFrameMsMsWindow,
         SQLFrame, SQLPasefFrameMsMs, SQLPrecursor, TDFMSnFacet,
     },
+    TdfError,
 };
 use crate::io::eic::{
     extract_eics_from_spectra, extract_eics_from_spectra_with_progress, initialize_results,
@@ -175,8 +175,12 @@ pub struct TDFFrameReaderType<
     C: FeatureLike<MZ, IonMobility> = Feature<MZ, IonMobility>,
     D: FeatureLike<Mass, IonMobility> + KnownCharge = ChargedFeature<Mass, IonMobility>,
 > {
-    metadata: timsrust::Metadata,
-    frame_reader: timsrust::readers::FrameReader,
+    metadata: TDFMetadata,
+    frame_reader: TdfFrameReader,
+    /// The `analysis.tdf` path this reader was opened from; the 0.6
+    /// `Metadata` only exposes it as a `&str` of uncertain resolution, so we
+    /// keep the original `PathBuf` for checksum/source-file bookkeeping.
+    tdf_path: PathBuf,
     tdf_reader: RawTDFSQLReader,
     entry_index: Vec<IndexExtry>,
     index: usize,
@@ -213,7 +217,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
     /// # Errors
     /// This may fail if any of the component files fails to match the expected schema
     /// or layout.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, timsrust::TimsRustError> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, TdfError> {
         Self::new_with_detail_level(path, DetailLevel::Full)
     }
 
@@ -286,19 +290,20 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
     pub fn new_with_detail_level<P: AsRef<Path>>(
         path: P,
         detail_level: DetailLevel,
-    ) -> Result<Self, timsrust::TimsRustError> {
+    ) -> Result<Self, TdfError> {
         let path = path.as_ref();
         let tdf_path = path.join("analysis.tdf");
         if !tdf_path.exists() {
-            return Err(timsrust::TimsRustError::FrameReaderError(
-                FrameReaderError::FileNotFound(tdf_path.display().to_string()),
-            ));
+            return Err(TdfError::FrameReader(FrameReaderError::FileNotFound(
+                tdf_path.display().to_string(),
+            )));
         }
 
-        let metadata = MetadataReader::new(&tdf_path)?;
-        let frame_reader = FrameReader::new(path)?;
-        let tdf_reader = RawTDFSQLReader::new(&tdf_path)
-            .map_err(|e| TimsRustError::FrameReaderError(FrameReaderError::SqlError(e.into())))?;
+        let metadata =
+            TDFMetadata::new(tdf_path.to_string_lossy().to_string())?;
+        let frame_reader =
+            TdfFrameReader::new(path.to_string_lossy().to_string())?;
+        let tdf_reader = RawTDFSQLReader::new(&tdf_path).map_err(TdfError::Sql)?;
 
         let calibration_models =
             CalibrationParameters::from_sql(&tdf_reader.connection(), &metadata)
@@ -313,6 +318,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         let mut this = Self {
             metadata,
             frame_reader,
+            tdf_path,
             tdf_reader,
             entry_index: Vec::new(),
             index: 0,
@@ -332,7 +338,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         };
 
         this.build_index()
-            .map_err(|e| TimsRustError::FrameReaderError(FrameReaderError::SqlError(e.into())))?;
+            .map_err(TdfError::Sql)?;
         this.build_metadata().unwrap();
 
         Ok(this)
@@ -637,7 +643,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                     consolidate_peaks(
                         &arrays,
                         &(0..arrays.ion_mobility_dimension.len() as u32),
-                        &self.metadata,
+                        &self.calibration_models,
                         error_tolerance,
                     )
                     .ok()
@@ -661,20 +667,25 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
     pub(crate) fn get(
         &self,
         index: usize,
-    ) -> Result<Option<MultiLayerIonMobilityFrame<C, D>>, TimsRustError> {
+    ) -> Result<Option<MultiLayerIonMobilityFrame<C, D>>, TdfError> {
         if let Some(entry) = self.entry_index.get(index) {
-            // `timsrust` uses base-zero indexing, but frame IDs start at 1
-            let frame = self
-                .frame_reader
-                .get(entry.frame.id.saturating_sub(1))
+            // timsrust 0.6 keys its frame offsets by the 1-based frame ID
+            // (unlike 0.4's base-zero `FrameReader::get`), so pass it as-is.
+            let frame = self.frame_reader.get_ions(entry.frame.id)
                 .inspect_err(|e| {
                     log::error!("Failed to read frame {index}: {e}");
                 })?;
 
-            let mut descr = frame_to_description(&self.metadata, entry, None);
+            let mut descr =
+                frame_to_description(&self.metadata, &self.calibration_models, entry, None);
 
             if let Some(parent_entry) = entry.parent_index.and_then(|i| self.entry_index.get(i)) {
-                descr.precursor = index_to_precursor(entry, &self.metadata, parent_entry);
+                descr.precursor = index_to_precursor(
+                    entry,
+                    &self.metadata,
+                    &self.calibration_models,
+                    parent_entry,
+                );
             }
 
             let arrays = if !matches!(self.detail_level, DetailLevel::MetadataOnly) {
@@ -723,18 +734,13 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         }
     }
 
-    pub fn get_trace_reader(&self) -> Result<ChromatographyData, TimsRustError> {
+    pub fn get_trace_reader(&self) -> Result<ChromatographyData, TdfError> {
         let path = self
-            .metadata
-            .path
+            .tdf_path
             .parent()
             .expect(".tdf file did not have an enclosing directory")
             .join(super::sql::ChromatographyData::FILE_NAME);
-        let handle = super::sql::ChromatographyData::new(&path).map_err(|e| {
-            TimsRustError::MetadataReaderError(timsrust::readers::MetadataReaderError::SqlError(
-                e.into(),
-            ))
-        })?;
+        let handle = super::sql::ChromatographyData::new(&path).map_err(TdfError::Sql)?;
         Ok(handle)
     }
 
@@ -804,7 +810,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
         let base_queries: Vec<_> = prepared.iter().map(|query| query.base.clone()).collect();
         let mut results = initialize_results(&base_queries);
 
-        let mut frame_cache: Option<(usize, timsrust::Frame, MzCalibrationModel)> = None;
+        let mut frame_cache: Option<(usize, FrameIons, MzCalibrationModel)> = None;
         let total = self.entry_index.len();
         for (entry_index, entry) in self.entry_index.iter().enumerate() {
             let time = entry.frame.time / 60.0;
@@ -834,8 +840,8 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
             if needs_refresh {
                 let frame = self
                     .frame_reader
-                    .get(entry.frame.id.saturating_sub(1))
-                    .map_err(timsrust::TimsRustError::from)?;
+                    .get_ions(entry.frame.id)
+                    .map_err(TdfError::from)?;
                 let (mz_model, _im_model) = self.calibration_models_for(entry_index);
                 frame_cache = Some((entry.frame.id, frame, mz_model));
             }
@@ -845,7 +851,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
                 .expect("frame cache should be populated");
             let frame = &cache.1;
             let mz_model = &cache.2;
-            let total_scans = frame.scan_offsets.len().saturating_sub(1);
+            let total_scans = frame.scan_offsets().len().saturating_sub(1);
             let (entry_scan_start, entry_scan_end) = entry.scan_range();
 
             for query_index in candidate_queries {
@@ -896,7 +902,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
 }
 
 fn sum_tdf_query(
-    frame: &timsrust::Frame,
+    frame: &FrameIons,
     mz_model: &MzCalibrationModel,
     query: &PreparedTDFEICQuery,
     scan_start: usize,
@@ -904,23 +910,23 @@ fn sum_tdf_query(
 ) -> f32 {
     let mut total = 0.0f32;
     for scan_index in scan_start..scan_end {
-        let start = frame.scan_offsets[scan_index];
-        let end = frame.scan_offsets[scan_index + 1];
+        let start = frame.scan_offsets()[scan_index];
+        let end = frame.scan_offsets()[scan_index + 1];
         if start >= end {
             continue;
         }
 
-        let tof_slice = &frame.tof_indices[start..end];
-        let intensity_slice = &frame.intensities[start..end];
-        let lower = tof_slice.partition_point(|tof| *tof < query.tof_min);
-        let upper = tof_slice.partition_point(|tof| *tof <= query.tof_max);
+        let tof_slice = &frame.tof_indices()[start..end];
+        let intensity_slice = &frame.intensities()[start..end];
+        let lower = tof_slice.partition_point(|tof| u32::from(*tof) < query.tof_min);
+        let upper = tof_slice.partition_point(|tof| u32::from(*tof) <= query.tof_max);
         total += tof_slice[lower..upper]
             .iter()
             .copied()
             .zip(intensity_slice[lower..upper].iter().copied())
             .filter_map(|(tof, intensity)| {
-                let mz = mz_model.convert(tof);
-                let intensity = intensity as f32;
+                let mz = mz_model.convert(f64::from(tof));
+                let intensity = u64::from(intensity) as f32;
                 (mz >= query.base.mz_min
                     && mz <= query.base.mz_max
                     && intensity >= query.base.min_intensity)
@@ -964,24 +970,21 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
             );
         }
 
-        let mut sf = SourceFile::from_path(&self.metadata.path)?;
+        let mut sf = SourceFile::from_path(&self.tdf_path)?;
         sf.file_format = Some(MassSpectrometerFileFormatTerm::BrukerTDF.into());
         sf.id_format = Some(NativeSpectrumIdentifierFormatTerm::BrukerTDFNativeIDFormat.into());
         #[cfg(not(debug_assertions))]
         sf.add_param(ControlledVocabulary::MS.param_val(
             1000569u32,
             "SHA-1",
-            checksum_file(&self.metadata.path)?,
+            checksum_file(&self.tdf_path)?,
         ));
-        sf.id = self
-            .metadata
-            .path
-            .file_name()
+        sf.id = self.tdf_path.file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "analysis_tdf".into());
         descr.source_files.push(sf);
 
-        let tdf_bin = self.metadata.path.with_extension("tdf_bin");
+        let tdf_bin = self.tdf_path.with_extension("tdf_bin");
         if tdf_bin.exists() {
             let mut sf = SourceFile::from_path(&tdf_bin)?;
             sf.file_format = Some(MassSpectrometerFileFormatTerm::BrukerTDF.into());
@@ -1135,8 +1138,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
     ) -> MassSpectrometryRun {
         let sf = file_description.source_files.first().unwrap();
         let run_id = self
-            .metadata
-            .path
+            .tdf_path
             .parent()
             .map(|s| s.as_os_str().to_string_lossy().to_string());
 
@@ -1191,7 +1193,7 @@ impl<C: FeatureLike<MZ, IonMobility>, D: FeatureLike<Mass, IonMobility> + KnownC
     }
 
     fn source_file_name(&self) -> Option<&str> {
-        self.metadata.path.to_str()
+        self.tdf_path.to_str()
     }
 }
 
@@ -1359,6 +1361,7 @@ impl<
             tdf_reader: view.tdf_reader,
             metadata: view.metadata,
             frame_reader: view.frame_reader,
+            tdf_path: view.tdf_path,
             entry_index: view.entry_index,
             index: view.index,
             calibration_models: view.calibration_models,
@@ -1572,7 +1575,7 @@ impl<
         DP: DeconvolutedCentroidLike,
     > TDFSpectrumReaderType<C, D, CP, DP>
 {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, TimsRustError> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, TdfError> {
         Self::new_with_peak_merging_tolerance(path, PEAK_MERGE_TOLERANCE, false)
     }
 
@@ -1580,7 +1583,7 @@ impl<
         path: P,
         peak_merging_tolerance: Tolerance,
         do_consolidate_peaks: bool,
-    ) -> Result<Self, TimsRustError> {
+    ) -> Result<Self, TdfError> {
         TDFFrameReaderType::<C, D>::new(path).map(|s| Self {
             frame_reader: s,
             peak_merging_tolerance,
@@ -1595,7 +1598,7 @@ impl<
         peak_merging_tolerance: Option<Tolerance>,
         do_consolidate_peaks: bool,
         detail_level: DetailLevel,
-    ) -> Result<Self, TimsRustError> {
+    ) -> Result<Self, TdfError> {
         TDFFrameReaderType::<C, D>::new(path).map(|mut s| {
             s.detail_level = detail_level;
             Self {
@@ -1637,7 +1640,7 @@ impl<
             spectrum.peaks = Some(consolidate_peaks(
                 &arrays,
                 &(0..arrays.ion_mobility_dimension.len() as u32),
-                &self.frame_reader.metadata,
+                &self.frame_reader.calibration_models,
                 self.peak_merging_tolerance,
             )?);
         };
@@ -1646,7 +1649,7 @@ impl<
     }
 
     /// Retrieve a spectrum by index
-    pub fn get(&self, index: usize) -> Result<Option<MultiLayerSpectrum>, TimsRustError> {
+    pub fn get(&self, index: usize) -> Result<Option<MultiLayerSpectrum>, TdfError> {
         self.frame_reader.get(index).map(|f| {
             f.map(|f| {
                 self.frame_reader.frame_to_spectrum(
@@ -1688,7 +1691,7 @@ impl<
         &mut self.peak_merging_tolerance
     }
 
-    pub fn get_trace_reader(&self) -> Result<ChromatographyData, TimsRustError> {
+    pub fn get_trace_reader(&self) -> Result<ChromatographyData, TdfError> {
         self.frame_reader.get_trace_reader()
     }
 
@@ -1723,7 +1726,8 @@ pub type TDFSpectrumReader = TDFSpectrumReaderType<
 
 fn index_to_precursor(
     index_entry: &IndexExtry,
-    metadata: &Metadata,
+    _metadata: &TDFMetadata,
+    calibration_models: &CalibrationParameters,
     parent_entry: &IndexExtry,
 ) -> Vec<Precursor> {
     if let Some(prec) = index_entry.precursor() {
@@ -1738,7 +1742,7 @@ fn index_to_precursor(
             ..Default::default()
         };
 
-        let im = metadata.im_converter.convert(prec.scan_average);
+        let im = calibration_models.basic_im_model.convert(prec.scan_average);
 
         let p = inverse_reduce_ion_mobility_param(im);
         ion.add_param(p);
@@ -1772,8 +1776,8 @@ fn index_to_precursor(
             charge: None,
             ..Default::default()
         };
-        let im = metadata
-            .im_converter
+        let im = calibration_models
+            .basic_im_model
             .convert((dia_window.scan_end + dia_window.scan_start) as f64 / 2.0);
 
         let p = inverse_reduce_ion_mobility_param(im);
@@ -1806,7 +1810,8 @@ fn index_to_precursor(
 }
 
 fn frame_to_description(
-    metadata: &Metadata,
+    metadata: &TDFMetadata,
+    calibration_models: &CalibrationParameters,
     index_entry: &IndexExtry,
     frame_slice: Option<Range<u32>>,
 ) -> IonMobilityFrameDescription {
@@ -1838,24 +1843,24 @@ fn frame_to_description(
         index_entry.frame.time / 60.0,
         index_entry.frame.accumulation_time,
         vec![ScanWindow {
-            lower_bound: metadata.lower_mz as f32,
-            upper_bound: metadata.upper_mz as f32,
+            lower_bound: f64::from(metadata.lower_mz()) as f32,
+            upper_bound: f64::from(metadata.upper_mz()) as f32,
         }],
         0,
         None,
     );
 
     if let Some(scan_range) = frame_slice.as_ref() {
-        let im = (metadata.im_converter.convert(scan_range.start)
-            + metadata.im_converter.convert(scan_range.end))
+        let im = (calibration_models.basic_im_model.convert(scan_range.start)
+            + calibration_models.basic_im_model.convert(scan_range.end))
             / 2.0;
         let p = inverse_reduce_ion_mobility_param(im);
         scan.add_param(p);
     }
 
     if let Some(pasef) = index_entry.pasef_msms() {
-        let im_low = metadata.im_converter.convert(pasef.scan_start as u32);
-        let im_high = metadata.im_converter.convert(pasef.scan_end as u32);
+        let im_low = calibration_models.basic_im_model.convert(pasef.scan_start as u32);
+        let im_high = calibration_models.basic_im_model.convert(pasef.scan_end as u32);
 
         descr.add_param(
             Param::new_key_value("ion mobility lower limit", im_low)
@@ -1872,8 +1877,8 @@ fn frame_to_description(
     }
 
     if let Some(pasef) = index_entry.dia_window() {
-        let im_low = metadata.im_converter.convert(pasef.scan_start as u32);
-        let im_high = metadata.im_converter.convert(pasef.scan_end as u32);
+        let im_low = calibration_models.basic_im_model.convert(pasef.scan_start as u32);
+        let im_high = calibration_models.basic_im_model.convert(pasef.scan_end as u32);
 
         descr.add_param(
             Param::new_key_value("ion mobility lower limit", im_low)
@@ -1962,7 +1967,7 @@ pub fn is_tdf<P: AsRef<Path>>(path: P) -> bool {
         return false;
     }
 
-    if MetadataReader::new(tdf_path).is_err() {
+    if TDFMetadata::new(tdf_path.to_string_lossy().to_string()).is_err() {
         return false;
     }
     true

@@ -156,7 +156,7 @@ pub enum EICError {
     ArrayRetrieval(#[from] ArrayRetrievalError),
     #[cfg(feature = "bruker_tdf")]
     #[error(transparent)]
-    TimsRust(#[from] timsrust::TimsRustError),
+    Tdf(#[from] crate::io::tdf::TdfError),
 }
 
 /// Units reported by EIC progress callbacks.

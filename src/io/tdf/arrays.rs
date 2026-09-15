@@ -4,10 +4,10 @@ use std::{
 };
 
 use mzpeaks::{feature::Feature, IonMobility, MZPeakSetType, MZ};
-use timsrust::{converters::ConvertableDomain, Metadata};
+use timsrust_core::FrameIons;
 
 use crate::{
-    io::tdf::{CalibrationParameters, sql::SQLFrame}, mzpeaks::{CentroidPeak, PeakSet}, params::Unit, prelude::*, spectrum::{
+    io::tdf::{calibration::ConvertableDomain, CalibrationParameters, sql::SQLFrame}, mzpeaks::{CentroidPeak, PeakSet}, params::Unit, prelude::*, spectrum::{
         ArrayType, BinaryArrayMap, BinaryDataArrayType, DataArray, bindata::{ArrayRetrievalError, BinaryArrayMap3D},
     },
 };
@@ -15,13 +15,13 @@ use crate::{
 use mzsignal::feature_mapping::{FeatureGraphBuilder, IMMSMapExtracter};
 
 pub struct FrameToArraysMapper<'a> {
-    frame: &'a timsrust::Frame,
+    frame: &'a FrameIons,
     calibration_models: &'a CalibrationParameters,
     frame_meta: &'a SQLFrame
 }
 
 impl<'a> FrameToArraysMapper<'a> {
-    pub fn new(frame: &'a timsrust::Frame, calibration_models: &'a CalibrationParameters, frame_meta: &'a SQLFrame) -> Self {
+    pub fn new(frame: &'a FrameIons, calibration_models: &'a CalibrationParameters, frame_meta: &'a SQLFrame) -> Self {
         Self { frame, calibration_models, frame_meta }
     }
 
@@ -49,7 +49,7 @@ impl<'a> FrameToArraysMapper<'a> {
         // tof_indices/intensities (length `n_scan_rows + 1`, last entry = total
         // peak count); scan `k`'s peaks are tof_indices[scan_offsets[k] ..
         // scan_offsets[k + 1]].
-        let n_scan_rows = self.frame.scan_offsets.len() - 1;
+        let n_scan_rows = self.frame.scan_offsets().len() - 1;
 
         let first_scan = match iv.start_bound() {
             std::ops::Bound::Included(i) => *i,
@@ -73,8 +73,8 @@ impl<'a> FrameToArraysMapper<'a> {
              im_converter) = self.find_calibration_models();
 
         for scan in first_scan..final_scan {
-            let begin = self.frame.scan_offsets[scan];
-            let end = self.frame.scan_offsets[scan + 1].min(self.frame.tof_indices.len());
+            let begin = self.frame.scan_offsets()[scan];
+            let end = self.frame.scan_offsets()[scan + 1].min(self.frame.tof_indices().len());
             let width = end.saturating_sub(begin);
 
             let mut mz_array_bytes: Vec<u8> =
@@ -82,12 +82,12 @@ impl<'a> FrameToArraysMapper<'a> {
             let mut intensity_array_bytes: Vec<u8> =
                 Vec::with_capacity(width * BinaryDataArrayType::Float32.size_of());
 
-            self.frame.tof_indices[begin..end].iter().for_each(|tof_idx| {
+            self.frame.tof_indices()[begin..end].iter().for_each(|tof_idx| {
                 mz_array_bytes
-                    .extend_from_slice(&mz_converter.convert(*tof_idx).to_le_bytes())
+                    .extend_from_slice(&mz_converter.convert(f64::from(*tof_idx)).to_le_bytes())
             });
-            self.frame.intensities[begin..end].iter().for_each(|intensity| {
-                intensity_array_bytes.extend_from_slice(&((*intensity as u64) as f32).to_le_bytes())
+            self.frame.intensities()[begin..end].iter().for_each(|intensity| {
+                intensity_array_bytes.extend_from_slice(&(u64::from(*intensity) as f32).to_le_bytes())
             });
             let drift = im_converter.convert(scan as u32);
             im_dimension.push(drift);
@@ -129,14 +129,14 @@ impl<'a> FrameToArraysMapper<'a> {
 pub fn consolidate_peaks<CP: CentroidLike + From<CentroidPeak>>(
     arrays: &BinaryArrayMap3D,
     scan_range: &Range<u32>,
-    metadata: &Metadata,
+    calibration_models: &CalibrationParameters,
     error_tolerance: Tolerance,
 ) -> Result<MZPeakSetType<CP>, ArrayRetrievalError> {
     let peaks: Result<Vec<_>, ArrayRetrievalError> = scan_range
         .clone()
         .rev()
         .map(|i| -> Result<(f64, PeakSet), ArrayRetrievalError> {
-            let im = metadata.im_converter.convert(i);
+            let im = calibration_models.basic_im_model.convert(i);
             if let Some(arrays_point) = arrays.get_ion_mobility(im) {
                 let mzs = arrays_point.mzs()?;
                 let intens = arrays_point.intensities()?;

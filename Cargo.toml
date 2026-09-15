@@ -113,7 +113,8 @@ thermo = [
 ]
 
 bruker_tdf = [
-    "dep:timsrust",
+    "dep:timsrust-core",
+    "dep:timsrust-tdf",
     "dep:parking_lot",
     "dep:rusqlite",
     "mzsignal",
@@ -216,10 +217,14 @@ futures = { version = "0.3", optional = true }
 thermorawfilereader = { version = "=0.8.0", default-features = false, optional = true }
 
 # Bruker TDF-related features
-rusqlite = { version = "0.31.0", optional = true }
-timsrust = { version = "0.4.1", default-features = false, features = [
-    "tdf",
-], optional = true }
+# timsrust 0.6 ecosystem: we depend on the `timsrust-tdf` + `timsrust-core`
+# subcrates directly (frame loading, metadata) instead of the `timsrust`
+# facade, which would unconditionally drag in minitdf/tsf/parquet-spectra.
+# rusqlite is pinned to the timsrust workspace's version so the two crates
+# share one native SQLite build.
+rusqlite = { version = "0.35", optional = true, default-features = false }
+timsrust-core = { version = "0.6.6", optional = true }
+timsrust-tdf = { version = "0.6.6", optional = true }
 
 parking_lot = { version = "0.12.3", optional = true }
 memchr = { version = "2.7.4", optional = true }
